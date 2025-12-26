@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FB Phase-2 Extractor</title>
+    <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+    <h2>FB Phase-2 Extractor</h2>
+
+    <div class="control-section">
+        <div class="file-input">
+            <label for="file">Upload Phase-1 Data (phase1.json):</label>
+            <input type="file" id="file" accept=".json" />
+        </div>
+
+        <div class="file-input">
+            <label for="final-file">Load Existing Final Data (final.json):</label>
+            <input type="file" id="final-file" accept=".json" />
+        </div>
+
+        <div class="control-group" style="margin-bottom: 15px; padding: 10px; background: #f0f2f5; border-radius: 4px;">
+            <label for="start-index-input" style="display: block; margin-bottom: 5px;">Start from Index:</label>
+            <div style="display: flex; gap: 5px;">
+                <input type="number" id="start-index-input" min="0" placeholder="0" style="flex: 1; padding: 5px;" />
+                <button id="set-index-btn" style="padding: 5px 10px;">Set</button>
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button id="start">▶ Start</button>
+            <button id="pause">⏸ Pause</button>
+            <button id="resume">▶ Resume</button>
+            <button id="stop">⏹ Stop</button>
+            <button id="previous">⏮ Previous</button>
+            <button id="next">⏭ Next</button>
+            <button id="reset">🔄 Reset</button>
+            <button id="download">💾 Download Final</button>
+            <button id="update-final">📝 Update final.json</button>
+        </div>
+
+        <div class="status-section">
+            <div id="status">Idle</div>
+            <div id="progress">Progress: 0/0</div>
+            <div id="errors">Errors: 0</div>
+            <div id="final-count">Collected: 0</div>
+            <div id="auto-save-status" style="font-size: 12px; color: #666; margin-top: 5px;">Auto-save: Requires local server (npm start)</div>
+        </div>
+    </div>
+
+    <div class="log-section">
+        <h3>Activity Log</h3>
+        <pre id="log"></pre>
+    </div>
+
+    <script src="sidepanel.js"></script>
+</body>
+</html>

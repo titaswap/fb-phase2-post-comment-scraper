@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "FB Phase-2 Extractor",
+  "version": "2.0",
+  "description": "Extract Facebook post comments from phase1.json links",
+  "permissions": ["storage", "tabs", "scripting", "sidePanel", "downloads"],
+  "host_permissions": ["https://www.facebook.com/*", "http://localhost:8080/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [{
+    "matches": ["https://www.facebook.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_start"
+  }],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Open FB Scraper"
+  }
+}

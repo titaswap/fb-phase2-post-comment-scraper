@@ -1,0 +1,19 @@
+{
+  "name": "fb-scraper-data-server",
+  "version": "1.0.0",
+  "description": "Local server to handle data appending for FB scraper",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node server/server.js",
+    "install-server": "npm install",
+    "setup": "npm install && echo 'Setup complete! Run \"npm start\" to start the server'"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  },
+  "keywords": ["facebook", "scraper", "data", "server"],
+  "author": "",
+  "license": "MIT"
+}
