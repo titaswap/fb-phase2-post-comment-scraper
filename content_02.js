@@ -8,6 +8,7 @@ console.log("[FB Extractor] Content script loaded successfully");
     console.log("[FB Extractor] IIFE starting");
 
     const seenResponses = new Set(); // Prevent duplicate processing
+    let CURRENT_POST_ID = null;
     let postData = null;
     let comments = [];
     let dataSendTimeout = null;
@@ -277,6 +278,7 @@ console.log("[FB Extractor] Content script loaded successfully");
     function extractPostData(data) {
         let post = null;
 
+
         walkObject(data, (obj) => {
             if (obj.__typename === 'Story' || obj.story) {
                 const story = obj.story || obj;
@@ -294,7 +296,7 @@ console.log("[FB Extractor] Content script loaded successfully");
                         text: cleanText(story.message?.text || ''),
                         timestamp: story.created_time || story.published_time || story.timestamp || story.creation_time || story.publish_time || story.date || extractPostDateFromDOM() || Date.now() / 1000
                     };
-
+                    CURRENT_POST_ID = story.id;
                     console.log("[FB Extractor] Post timestamp raw:", story.creation_time, story.publish_time, "Final timestamp:", post.timestamp);
 
                     // Add additional fields
@@ -351,153 +353,105 @@ console.log("[FB Extractor] Content script loaded successfully");
         const matches = text.match(hashtagRegex);
         return matches ? matches : [];
     }
-    function resolveParentId(obj, postId) {
-        // 🔴 MOST RELIABLE (reply → reply)
-        if (obj.reply_to_comment?.id) {
-            return obj.reply_to_comment.id;
-        }
 
-        // 🟠 Standard parent
-        if (obj.comment_parent?.id) {
-            return obj.comment_parent.id;
-        }
-
-        // 🟡 Older FB structure
-        if (obj.feedback?.parent_feedback?.id) {
-            return obj.feedback.parent_feedback.id;
-        }
-
-        // 🟢 If parent is post itself → top-level
-        if (obj.comment_parent?.id === postId) {
-            return null;
-        }
-
-        return null;
-    }
-
-    // ---------------------------------------------------------
-    // 🧠 INTELLIGENT RECURSIVE EXTRACTION LOGIC
-    // ---------------------------------------------------------
-
-    // Deep search for Arrays that look like comment lists
-    function findCommentsArray(obj, foundArrays = []) {
-        if (!obj || typeof obj !== 'object') return foundArrays;
-
-        // Check if this object looks like a list of nodes
-        if (Array.isArray(obj)) {
-            // Check first few items to see if they look like comments
-            const looksLikeComments = obj.length > 0 && obj.some(item =>
-                item && typeof item === 'object' && item.id && (item.body || item.author || item.message)
-                && item.__typename !== 'Story' // Exclude main post
-            );
-
-            if (looksLikeComments) {
-                foundArrays.push(obj);
-            }
-        }
-
-        // Also check specific edges pattern (replies_connection)
-        if (obj.edges && Array.isArray(obj.edges)) {
-            const looksLikeEdges = obj.edges.length > 0 && obj.edges.some(edge =>
-                edge.node && edge.node.id && (edge.node.body || edge.node.author)
-            );
-            if (looksLikeEdges) {
-                // Map edges to nodes and treat as array
-                foundArrays.push(obj.edges.map(e => e.node));
-            }
-        }
-
-        for (const key in obj) {
-            if (obj.hasOwnProperty(key) && key !== '__parent') {
-                findCommentsArray(obj[key], foundArrays);
-            }
-        }
-        return foundArrays;
-    }
-
-    // Recursive function to process comments and their replies
-    function processCommentsHelper(commentsArray) {
-        if (!commentsArray || !Array.isArray(commentsArray)) return [];
-
-        return commentsArray.map(node => {
-            if (!node || !node.id) return null;
-
-            const id = node.id || node.legacy_fbid;
-
-            // Clean text
-            const rawText = node.body ? node.body.text : (node.message ? (node.message.text || node.message) : '');
-            const text = cleanText(rawText);
-
-            // Timestamp
-            const ts = node.created_time || node.creation_time || node.publish_time || Math.floor(Date.now() / 1000);
-
-            const commentData = {
-                id: id,
-                author: node.author ? node.author.name : 'Unknown',
-                author_id: node.author ? node.author.id : 'Unknown',
-                text: text,
-                timestamp: ts,
-                date: new Date(ts * 1000).toLocaleString(),
-                replies: []
-            };
-
-            // Check for replies in likely locations (RECURSION HERE)
-            let foundReplies = [];
-
-            if (node.feedback && node.feedback.replies && node.feedback.replies.nodes) {
-                foundReplies = node.feedback.replies.nodes;
-            } else if (node.replies && node.replies.nodes) {
-                foundReplies = node.replies.nodes;
-            } else if (node.feedback && node.feedback.replies_connection && node.feedback.replies_connection.edges) {
-                // Handle "replies_connection" schema
-                foundReplies = node.feedback.replies_connection.edges.map(edge => edge.node);
-            }
-
-            if (foundReplies && foundReplies.length > 0) {
-                commentData.replies = processCommentsHelper(foundReplies);
-            }
-
-            return commentData;
-        }).filter(c => c !== null);
-    }
-
-    // Logic to fix "Ulta Palta" (Disjointed) Comments
-    // Removes top-level items if they are already nested as replies inside others
-    function deduplicateComments(allComments) {
-        const childIds = new Set();
-
-        function collectChildIds(nodes) {
-            nodes.forEach(node => {
-                if (node.replies && node.replies.length > 0) {
-                    node.replies.forEach(reply => {
-                        childIds.add(reply.id);
-                        collectChildIds([reply]); // Recurse
-                    });
-                }
-            });
-        }
-
-        collectChildIds(allComments);
-
-        // Return only those that are NOT children of others
-        const uniqueTopLevel = allComments.filter(comment => !childIds.has(comment.id));
-
-        console.log(`[FB Extractor] Deduplication: Raw ${allComments.length} -> Unique Types ${uniqueTopLevel.length} (Removed ${allComments.length - uniqueTopLevel.length} duplicates)`);
-
-        return uniqueTopLevel;
-    }
 
     function extractComments(data) {
-        // 1. Find ALL arrays that look like comments anywhere in the data
-        const potentialArrays = findCommentsArray(data);
+        const roots = [];
+        const seen = new Set();
 
-        let extracted = [];
-        potentialArrays.forEach(arr => {
-            const processed = processCommentsHelper(arr);
-            extracted = extracted.concat(processed);
+        walkObject(data, obj => {
+            if (obj?.__typename === 'Comment' && obj.id && !seen.has(obj.id)) {
+                // ❗️ top-level comment চিনবো যেগুলোর parent নেই
+                const isReply =
+                    obj.reply_to_comment?.id ||
+                    obj.comment_parent?.id ||
+                    obj.feedback?.parent_feedback?.id;
+
+                if (!isReply) {
+                    roots.push(obj);
+                }
+
+                seen.add(obj.id);
+            }
         });
 
-        return extracted;
+        return roots;
+    }
+
+
+
+
+
+    // Helper to clean extracted text
+    function cleanText(text) {
+        if (!text) return "";
+        // Replace newlines and multiple spaces with a single space
+        return text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    function getReplyNodes(node) {
+        if (!node) return [];
+
+        if (node.feedback?.replies?.nodes) {
+            return node.feedback.replies.nodes;
+        }
+
+        if (node.feedback?.replies_connection?.edges) {
+            return node.feedback.replies_connection.edges.map(e => e.node);
+        }
+
+        if (node.replies?.nodes) {
+            return node.replies.nodes;
+        }
+
+        return [];
+    }
+    function buildCommentTree(node) {
+        const ts =
+            node.created_time ||
+            node.creation_time ||
+            node.publish_time ||
+            Math.floor(Date.now() / 1000);
+
+        const comment = {
+            id: node.id || node.legacy_fbid,
+            author: node.author?.name || 'Unknown',
+            author_id: node.author?.id || null,
+            text: cleanText(node.body?.text || node.message?.text || ''),
+            timestamp: ts,
+            date: new Date(ts * 1000).toLocaleString(),
+            replies: [],
+            __raw: node
+        };
+
+        const replies = getReplyNodes(node);
+
+        if (replies.length > 0) {
+            comment.replies = replies.map(r => buildCommentTree(r));
+        }
+        console.log(
+            "[TREE]",
+            comment.id,
+            "depth replies:",
+            comment.replies.length
+        );
+
+        return comment;
+    }
+
+
+
+    // Function to nest comments properly
+
+
+
+    function walkObject(obj, callback) {
+        if (!obj || typeof obj !== 'object') return;
+        callback(obj);
+        for (const key in obj) {
+            if (obj.hasOwnProperty(key)) {
+                walkObject(obj[key], callback);
+            }
+        }
     }
 
     function sendDataToBackground() {
@@ -509,19 +463,34 @@ console.log("[FB Extractor] Content script loaded successfully");
             dataSendTimeout = null;
         }
 
-        // Deduplicate comments properly before sending
-        // This handles cases where we scraped both Parent and Child separately
-        console.log("[FB Extractor] Deduplicating", comments.length, "comments...");
-        const nestedComments = deduplicateComments(comments);
+        // Nest comments properly before sending
+        console.log("[FB Extractor] Nesting", comments.length, "flat comments...");
+        // STEP A: unique comment nodes
+        const map = new Map();
+        comments.forEach(c => {
+            if (c.id) map.set(c.id, c);
+        });
+
+        // STEP B: top-level comment detect
+        const roots = [];
+
+        map.forEach(node => {
+            const isReply =
+                node.reply_to_comment?.id ||
+                node.comment_parent?.id ||
+                node.feedback?.parent_feedback?.id;
+
+            if (!isReply) {
+                roots.push(buildCommentTree(node));
+            }
+        });
+
+        const nestedComments = roots;
+
 
         // Update comment count based on actually extracted comments
         postData.comment_count = nestedComments.length;
         postData.comments = nestedComments;
-
-        console.log("---------------------------------------------------------");
-        console.log("📊 [FINAL POST DATA] (JSON Format):");
-        console.log(JSON.stringify(postData, null, 2));
-        console.log("---------------------------------------------------------");
 
         console.log("[FB Extractor] Sending data - Post:", postData.id, "Nested comments:", nestedComments.length);
 
@@ -539,6 +508,7 @@ console.log("[FB Extractor] Content script loaded successfully");
             postData = null;
             comments = [];
             seenResponses.clear();
+            CURRENT_POST_ID = null;
             console.log("[FB Extractor] Page changed, resetting");
         }
     });

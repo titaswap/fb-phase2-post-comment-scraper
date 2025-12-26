@@ -8,8 +8,7 @@ let STATE = {
     final: [],          // Collected data
     tabId: null,        // Current tab ID
     errors: 0,          // Error count
-    processed: new Set(), // Set of processed post IDs to prevent duplicates
-    navigationTimeout: null // Failsafe timer
+    processed: new Set() // Set of processed post IDs to prevent duplicates
 };
 
 // Load saved state on startup
@@ -42,14 +41,6 @@ function saveState() {
         errors: STATE.errors,
         processed: Array.from(STATE.processed)
     });
-}
-
-// Clear any pending navigation timeout
-function clearNavigationTimeout() {
-    if (STATE.navigationTimeout) {
-        clearTimeout(STATE.navigationTimeout);
-        STATE.navigationTimeout = null;
-    }
 }
 
 // Auto-save final.json via local server
@@ -152,14 +143,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
         case "PAUSE_PHASE2":
             STATE.paused = true;
-            stopPeriodicAutoSave();
-            clearNavigationTimeout(); // Don't skip if paused
+            stopPeriodicAutoSave(); // Stop periodic auto-save when paused
             sendResponse({ success: true });
             break;
 
         case "RESUME_PHASE2":
             STATE.paused = false;
-            startPeriodicAutoSave();
+            startPeriodicAutoSave(); // Resume periodic auto-save
             nextPost();
             sendResponse({ success: true });
             break;
@@ -167,8 +157,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "STOP_PHASE2":
             STATE.running = false;
             STATE.paused = false;
-            stopPeriodicAutoSave();
-            clearNavigationTimeout();
+            stopPeriodicAutoSave(); // Stop periodic auto-save
             saveState();
             sendResponse({ success: true });
             break;
@@ -273,9 +262,6 @@ function normalizeCommentDates(comments) {
 
 // Handle incoming post data from content script
 function handlePostData(data) {
-    // Data received! Clear the timeout.
-    clearNavigationTimeout();
-
     // Wrap data if it's not already wrapped (content.js sends flat post object)
     const finalData = data.post ? data : {
         post: data,
@@ -363,17 +349,6 @@ function nextPost() {
 
     const post = STATE.posts[STATE.index++];
     console.log("➡ Loading post:", STATE.index, post.post_link);
-
-    // Set 60s failsafe timeout
-    clearNavigationTimeout();
-    STATE.navigationTimeout = setTimeout(() => {
-        if (STATE.running && !STATE.paused) {
-            console.error("⏳ Timeout detected for post:", post.post_link, "- Moving to next.");
-            STATE.errors++;
-            saveState();
-            nextPost();
-        }
-    }, 60000); // 60 seconds
 
     chrome.tabs.update(STATE.tabId, { url: post.post_link }, () => {
         if (chrome.runtime.lastError) {
