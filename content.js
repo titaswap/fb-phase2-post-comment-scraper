@@ -8,9 +8,9 @@ console.log("[FB Extractor] Content script loaded successfully");
     console.log("[FB Extractor] IIFE starting");
 
     const seenResponses = new Set(); // Prevent duplicate processing
+    let CURRENT_POST_ID = null;
     let postData = null;
     let comments = [];
-    let processed = false;
     let dataSendTimeout = null;
 
     function scheduleDataSend() {
@@ -18,7 +18,7 @@ console.log("[FB Extractor] Content script loaded successfully");
 
         // Send data after 5 seconds of no new activity (longer to collect more comments)
         dataSendTimeout = setTimeout(() => {
-            if (postData && !processed) {
+            if (postData) {
                 console.log("[FB Extractor] Timeout reached, sending available data with", comments.length, "comments");
                 sendDataToBackground();
             }
@@ -28,12 +28,12 @@ console.log("[FB Extractor] Content script loaded successfully");
     console.log("[FB Extractor] Variables initialized");
 
     // Intercept XMLHttpRequest
-    // console.log("[FB Extractor] Setting up XMLHttpRequest interception");
+    console.log("[FB Extractor] Setting up XMLHttpRequest interception");
     const originalOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function (method, url) {
         //  console.log("[FB Extractor] XMLHttpRequest opened:", method, url);
         if (url.includes('graphql') || url.includes('facebook.com/api') || url.includes('graph.facebook.com')) {
-            // console.log("[FB Extractor] Potential data request detected:", url);
+            console.log("[FB Extractor] Potential data request detected:", url);
         }
         this.addEventListener("load", () => {
             if (this.responseText) {
@@ -69,7 +69,7 @@ console.log("[FB Extractor] Content script loaded successfully");
         const url = args[0];
         console.log("[FB Extractor] Fetch called:", url);
         if (typeof url === 'string' && (url.includes('graphql') || url.includes('facebook.com/api') || url.includes('graph.facebook.com'))) {
-            // console.log("[FB Extractor] Potential data fetch detected:", url);
+            console.log("[FB Extractor] Potential data fetch detected:", url);
         }
         return originalFetch.apply(this, args).then(response => {
             console.log("[FB Extractor] Fetch response for:", url, "Status:", response.status);
@@ -240,7 +240,7 @@ console.log("[FB Extractor] Content script loaded successfully");
     }
 
     function processGraphQLResponse(data) {
-        if (!data || processed) return;
+        if (!data) return;
 
         const responseStr = JSON.stringify(data);
         if (seenResponses.has(responseStr)) return;
@@ -278,13 +278,15 @@ console.log("[FB Extractor] Content script loaded successfully");
     function extractPostData(data) {
         let post = null;
 
+
         walkObject(data, (obj) => {
             if (obj.__typename === 'Story' || obj.story) {
                 const story = obj.story || obj;
                 if (story.id && story.message) {
+                    console.log("👉 [DEBUG] Raw Story Object Found:", story);
                     /*   console.log("[FB Extractor] Story object keys:", Object.keys(story));
-                      console.log("[FB Extractor] Story creation_time:", story.creation_time, "publish_time:", story.publish_time);
-                      console.log("[FB Extractor] Story full object:", story); */
+                    console.log("[FB Extractor] Story creation_time:", story.creation_time, "publish_time:", story.publish_time);
+                    console.log("[FB Extractor] Story full object:", story); */
 
                     // Extract basic post data
                     post = {
@@ -294,7 +296,7 @@ console.log("[FB Extractor] Content script loaded successfully");
                         text: cleanText(story.message?.text || ''),
                         timestamp: story.created_time || story.published_time || story.timestamp || story.creation_time || story.publish_time || story.date || extractPostDateFromDOM() || Date.now() / 1000
                     };
-
+                    CURRENT_POST_ID = story.id;
                     console.log("[FB Extractor] Post timestamp raw:", story.creation_time, story.publish_time, "Final timestamp:", post.timestamp);
 
                     // Add additional fields
@@ -351,50 +353,95 @@ console.log("[FB Extractor] Content script loaded successfully");
         const matches = text.match(hashtagRegex);
         return matches ? matches : [];
     }
+    function resolveParentId(obj, postId) {
+        // 🥇 reply → reply (সবচেয়ে reliable)
+        if (obj.reply_to_comment && obj.reply_to_comment.id) {
+            return obj.reply_to_comment.id;
+        }
+
+        // 🥈 direct parent comment
+        if (obj.comment_parent && obj.comment_parent.id) {
+            // যদি parent = post হয় → top level
+            if (obj.comment_parent.id === postId) {
+                return null;
+            }
+            return obj.comment_parent.id;
+        }
+
+        // 🥉 fallback (পুরনো structure)
+        if (
+            obj.feedback &&
+            obj.feedback.parent_feedback &&
+            obj.feedback.parent_feedback.id &&
+            obj.feedback.parent_feedback.id !== postId
+        ) {
+            return obj.feedback.parent_feedback.id;
+        }
+
+        // 🟢 otherwise top-level
+        return null;
+    }
+
 
     function extractComments(data) {
-        const allComments = []; // Store all comments (top-level and replies)
+        const allComments = [];
 
         walkObject(data, (obj) => {
-            if (obj.__typename === 'Comment' && obj.body) {
+            if (obj.__typename === 'Comment' && obj.body?.text) {
+
+                const id = obj.id || obj.legacy_fbid;
+                if (!id) return;
+
+                const parentId = resolveParentId(obj, CURRENT_POST_ID);
+                if (!CURRENT_POST_ID) {
+                    return;
+                }
+                const ts =
+                    obj.created_time ||
+                    obj.creation_time ||
+                    obj.publish_time ||
+                    Math.floor(Date.now() / 1000);
+
                 const comment = {
-                    id: obj.id || obj.legacy_fbid,
+                    id,
                     author: obj.author?.name || 'Unknown',
                     author_id: obj.author?.id || 'Unknown',
-                    text: cleanText(obj.body?.text || ''),
-                    timestamp: obj.created_time || obj.published_time || obj.timestamp || obj.creation_time || obj.publish_time || obj.date || Date.now() / 1000,
-                    parent_id: obj.parent_comment_id || obj.parent_comment?.id || obj.reply_to_comment?.id || null,
-                    comment_link: obj.url || (window.location.href.split('?')[0] + '?comment_id=' + (obj.id || obj.legacy_fbid)),
-                    replies: [] // Will be populated later
+                    text: cleanText(obj.body.text),
+                    timestamp: ts,
+                    date: new Date(ts * 1000).toLocaleString(),
+                    parent_id: parentId,
+                    comment_link:
+                        obj.url ||
+                        `${location.href.split('?')[0]}?comment_id=${id}`,
+                    replies: [],
+
+                    // 🧠 OPTIONAL: raw GraphQL object (VERY IMPORTANT for debug)
+                    __raw: obj
                 };
 
-                // Add date field to comment
-                let commentTimestampMs = comment.timestamp;
-                const commentTime = comment.timestamp * 1000;
-                const now = Date.now();
+                console.log(
+                    "[PHASE-2] COMMENT",
+                    comment.id,
+                    parentId
+                        ? "↳ reply to " + parentId
+                        : "↳ top-level"
+                );
 
-                if (commentTime > now + (365 * 24 * 60 * 60 * 1000)) {
-                    commentTimestampMs = comment.timestamp;
-                } else {
-                    commentTimestampMs = commentTime;
-                }
+                // 🔍 Raw object access example
+                console.log(
+                    "[PHASE-2] RAW OBJECT FOR",
+                    comment.id,
+                    obj
+                );
 
-                comment.date = new Date(commentTimestampMs).toLocaleString('en-US', {
-                    year: 'numeric',
-                    month: '2-digit',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit'
-                });
-
-                console.log("[FB Extractor] Found comment:", comment.id, "Parent:", comment.parent_id, "Text:", comment.text.substring(0, 30) + "...");
                 allComments.push(comment);
             }
         });
 
         return allComments;
     }
+
+
 
     // Helper to clean extracted text
     function cleanText(text) {
@@ -405,32 +452,34 @@ console.log("[FB Extractor] Content script loaded successfully");
 
     // Function to nest comments properly
     function nestComments(flatComments) {
-        const commentMap = new Map();
-        const topLevelComments = [];
+        const map = new Map();
+        const roots = [];
 
-        // First pass: create map of all comments
-        flatComments.forEach(comment => {
-            comment.replies = []; // Ensure replies array exists
-            commentMap.set(comment.id, comment);
+        // 1️⃣ First pass: map all comments
+        flatComments.forEach(c => {
+            c.replies = [];
+            map.set(c.id, c);
         });
 
-        // Second pass: nest replies under their parents
-        flatComments.forEach(comment => {
-            if (comment.parent_id && commentMap.has(comment.parent_id)) {
-                // This is a reply, add it to parent's replies
-                const parent = commentMap.get(comment.parent_id);
-                parent.replies.push(comment);
-                console.log("[FB Extractor] Nested reply", comment.id, "under parent", comment.parent_id);
+        // 2️⃣ Second pass: attach to parent
+        flatComments.forEach(c => {
+            if (c.parent_id && map.has(c.parent_id)) {
+                map.get(c.parent_id).replies.push(c);
             } else {
-                // This is a top-level comment
-                topLevelComments.push(comment);
-                console.log("[FB Extractor] Added top-level comment:", comment.id);
+                roots.push(c);
             }
         });
 
-        console.log("[FB Extractor] Final structure - Top level:", topLevelComments.length, "Total comments:", flatComments.length);
-        return topLevelComments;
+        // 3️⃣ FIX: recursively normalize hierarchy
+        function normalize(node) {
+            if (!node.replies || node.replies.length === 0) return;
+            node.replies.forEach(child => normalize(child));
+        }
+
+        roots.forEach(r => normalize(r));
+        return roots;
     }
+
 
     function walkObject(obj, callback) {
         if (!obj || typeof obj !== 'object') return;
@@ -443,9 +492,7 @@ console.log("[FB Extractor] Content script loaded successfully");
     }
 
     function sendDataToBackground() {
-        if (!postData || processed) return;
-
-        processed = true;
+        if (!postData) return;
 
         // Clear any pending timeout
         if (dataSendTimeout) {
@@ -476,8 +523,8 @@ console.log("[FB Extractor] Content script loaded successfully");
             currentUrl = window.location.href;
             postData = null;
             comments = [];
-            processed = false;
             seenResponses.clear();
+            CURRENT_POST_ID = null;
             console.log("[FB Extractor] Page changed, resetting");
         }
     });

@@ -248,6 +248,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 });
 
+function normalizeCommentDates(comments) {
+    comments.forEach(c => {
+        if (!c.date && c.timestamp) {
+            const ts = c.timestamp * 1000;
+            c.timestamp_readable = new Date(ts).toLocaleString();
+        }
+        if (c.replies && c.replies.length > 0) {
+            normalizeCommentDates(c.replies);
+        }
+    });
+}
+
 // Handle incoming post data from content script
 function handlePostData(data) {
     // Wrap data if it's not already wrapped (content.js sends flat post object)
@@ -264,9 +276,29 @@ function handlePostData(data) {
         return;
     }
 
+    // Check if post already exists (Duplicate or Update)
     if (STATE.processed.has(postId)) {
-        console.log("⚠ Duplicate post skipped:", postId);
-        return;
+        // Find existing entry index
+        const existingIndex = STATE.final.findIndex(item => item.post && item.post.id === postId);
+
+        if (existingIndex !== -1) {
+            const existingPost = STATE.final[existingIndex];
+            const oldCommentCount = existingPost.post.comments ? existingPost.post.comments.length : 0;
+            const newCommentCount = finalData.post.comments ? finalData.post.comments.length : 0;
+
+            // Update the entry
+            STATE.final[existingIndex] = finalData;
+            saveState();
+
+            console.log(`🔄 Updated post ${postId}: ${oldCommentCount} -> ${newCommentCount} comments`);
+
+            // Auto-save just in case
+            autoSaveFinal();
+
+            // DO NOT call nextPost() here because we already processed this post's navigation 
+            // when we first saw it. Calling it again would skip the next post in the queue.
+            return;
+        }
     }
 
     // Reference to the post object for timestamp conversion
@@ -288,36 +320,7 @@ function handlePostData(data) {
 
     // Handle nested comments
     if (post.comments) {
-        post.comments.forEach(comment => {
-            if (!comment.date && comment.timestamp) {
-                const timestampMs = comment.timestamp * 1000;
-                const commentDate = new Date(timestampMs);
-                const now = Date.now();
-
-                // If the date is too far in the future, try without multiplying
-                if (timestampMs > now + (365 * 24 * 60 * 60 * 1000)) {
-                    comment.timestamp_readable = new Date(comment.timestamp).toLocaleString();
-                } else {
-                    comment.timestamp_readable = commentDate.toLocaleString();
-                }
-            }
-            if (comment.replies) {
-                comment.replies.forEach(reply => {
-                    if (!reply.date && reply.timestamp) {
-                        const timestampMs = reply.timestamp * 1000;
-                        const replyDate = new Date(timestampMs);
-                        const now = Date.now();
-
-                        // If the date is too far in the future, try without multiplying
-                        if (timestampMs > now + (365 * 24 * 60 * 60 * 1000)) {
-                            reply.timestamp_readable = new Date(reply.timestamp).toLocaleString();
-                        } else {
-                            reply.timestamp_readable = replyDate.toLocaleString();
-                        }
-                    }
-                });
-            }
-        });
+        normalizeCommentDates(post.comments);
     }
 
     STATE.final.push(finalData);
