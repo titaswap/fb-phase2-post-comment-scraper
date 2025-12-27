@@ -23,15 +23,41 @@ const updateUI = (status) => {
     errorsEl.textContent = `Errors: ${status.errors}`;
     finalCountEl.textContent = `Collected: ${status.finalCount}`;
 
+    // Update Server Info
+    const serverEl = document.getElementById("server-info");
+    if (serverEl && status.serverUrl) {
+        serverEl.textContent = `Target: ${status.serverUrl}`;
+    }
+
     // Update auto-save status
     const autoSaveEl = document.getElementById("auto-save-status");
     if (status.running && !status.paused) {
         autoSaveEl.textContent = "Auto-save: Active (to ./data/final.json via server)";
-        autoSaveEl.style.color = "#28a745";
+        autoSaveEl.style.color = "#10b981";
     } else {
         autoSaveEl.textContent = "Auto-save: Requires local server (npm start)";
-        autoSaveEl.style.color = "#666";
+        autoSaveEl.style.color = "#94a3b8";
     }
+
+    // Button States Logic
+    const isRunning = status.running;
+    const isPaused = status.paused;
+
+    // Control Buttons
+    document.getElementById("start").disabled = isRunning;
+    document.getElementById("pause").disabled = !isRunning || isPaused;
+    document.getElementById("resume").disabled = !isRunning || !isPaused;
+    document.getElementById("stop").disabled = !isRunning;
+
+    // Navigation/Config Buttons (Disabled while running for safety)
+    const inputsDisabled = isRunning;
+    document.getElementById("previous").disabled = inputsDisabled;
+    document.getElementById("next").disabled = inputsDisabled;
+    document.getElementById("reset").disabled = inputsDisabled;
+    document.getElementById("set-index-btn").disabled = inputsDisabled;
+    document.getElementById("start-index-input").disabled = inputsDisabled;
+    document.getElementById("file").disabled = inputsDisabled;
+    document.getElementById("final-file").disabled = inputsDisabled;
 };
 
 // Load initial status
@@ -223,3 +249,60 @@ setInterval(() => {
         if (response) updateUI(response);
     });
 }, 2000);
+
+// Listen for countdown, status, and server updates
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type === "COUNTDOWN_UPDATE") {
+        const countdownEl = document.getElementById("countdown");
+        if (countdownEl) {
+            const payload = msg.payload;
+
+            if (typeof payload === 'number') {
+                if (payload > 0) {
+                    countdownEl.textContent = `Next in: ${payload}s`;
+                    countdownEl.style.color = payload <= 3 ? "#ef4444" : "#f59e0b"; // Red : Orange
+                } else {
+                    countdownEl.textContent = "Connecting...";
+                    countdownEl.style.color = "#10b981"; // Green
+                }
+            } else if (typeof payload === 'string') {
+                countdownEl.textContent = payload;
+
+                // Dynamic colors for text states
+                if (payload.includes("Scraping") || payload.includes("Loading")) {
+                    countdownEl.style.color = "#0ea5e9"; // Blue
+                } else if (payload.includes("Timeout") || payload.includes("Error")) {
+                    countdownEl.style.color = "#ef4444"; // Red
+                } else if (payload.includes("Processed")) {
+                    countdownEl.style.color = "#10b981"; // Green
+                } else {
+                    countdownEl.style.color = "#94a3b8"; // Default Grey
+                }
+            }
+        }
+    } else if (msg.type === "SERVER_STATS") {
+        const stats = msg.payload;
+        const finalCountEl = document.getElementById("final-count");
+
+        if (stats.success) {
+            finalCountEl.textContent = `Collected: ${stats.total}`;
+
+            // Show temporary status next to count or in a specific place
+            const statusSuffix = stats.appended > 0 ? ` (+${stats.appended} New)` : ` (Duplicate)`;
+            finalCountEl.textContent += statusSuffix;
+            finalCountEl.style.color = stats.appended > 0 ? "#10b981" : "#f59e0b"; // Green if new, Orange if duplicate
+
+            // Reset style after 3 seconds
+            setTimeout(() => {
+                finalCountEl.textContent = `Collected: ${stats.total}`;
+                finalCountEl.style.color = "#10b981"; // Back to green
+            }, 3000);
+
+        } else {
+            finalCountEl.textContent = `Error: ${stats.error}`;
+            finalCountEl.style.color = "#ef4444";
+        }
+    } else if (msg.type === "LOG_MESSAGE") {
+        log(msg.payload);
+    }
+});

@@ -25,7 +25,7 @@ console.log("[FB Extractor] Content script loaded successfully");
                 console.log("[FB Extractor] Timeout reached, sending RAW matched post data...");
                 sendDataToBackground();
             }
-        }, 4000);
+        }, 2000);
     }
 
     console.log("[FB Extractor] Variables initialized");
@@ -107,7 +107,42 @@ console.log("[FB Extractor] Content script loaded successfully");
         dataObserver.observe(document.body, { childList: true, subtree: true });
     }
 
+    // Initial check of existing DOM elements
+    checkEmbeddedData();
+
+    // Observers to catch dynamically added content
+    function setupDOMObservers() {
+        console.log("[FB Extractor] Setting up DOM observers");
+
+        // Observe script tags (often used for initial data hydration)
+        const scriptObserver = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.tagName === 'SCRIPT') {
+                        checkElementForData(node);
+                    }
+                });
+            });
+        });
+        scriptObserver.observe(document.documentElement, { childList: true, subtree: true });
+
+        // Observe main body for text content changes (less reliable but fallback)
+        /* 
+        const dataObserver = new MutationObserver((mutations) => {
+             // ... existing logic ... 
+        });
+        dataObserver.observe(document.body, { childList: true, subtree: true });
+        */
+
+        // Instead of heavy body observer, just check periodically if missed
+        setInterval(checkEmbeddedData, 2000);
+    }
+
     setupDOMObservers();
+
+    // Run immediate check again after small delay to catch hydration
+    setTimeout(checkEmbeddedData, 1000);
+    setTimeout(checkEmbeddedData, 3000);
 
     // Check for WebSocket connections
     const originalWebSocket = window.WebSocket;

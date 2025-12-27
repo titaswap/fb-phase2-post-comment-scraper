@@ -12,7 +12,8 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 // Path to formatted_posts_final.json
-const FINAL_JSON_PATH = path.join(__dirname, '..', 'data', 'formatted_posts_final.json');
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const FINAL_JSON_PATH = path.join(DATA_DIR, 'formatted_posts_final.json');
 
 // Ensure data directory exists
 if (!fs.existsSync(path.join(__dirname, '..', 'data'))) {
@@ -120,10 +121,35 @@ app.get('/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+// Endpoint to get all processed URLs for client-side deduplication
+app.get('/get-processed-urls', (req, res) => {
+    try {
+        const finalPath = path.join(DATA_DIR, 'formatted_posts_final.json');
+        if (!fs.existsSync(finalPath)) {
+            return res.json({ success: true, urls: [] });
+        }
+
+        const rawData = fs.readFileSync(finalPath, 'utf8');
+        const posts = JSON.parse(rawData);
+
+        // Extract URLs or IDs
+        // We will return URLs, but ideally we should extract the numeric ID if possible
+        // Let's return the full URLs and let the client handle ID extraction for matching
+        const urls = posts
+            .filter(item => item.post && item.post.url)
+            .map(item => item.post.url);
+
+        res.json({ success: true, urls: urls });
+    } catch (error) {
+        console.error('❌ Error fetching processed URLs:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Start the server
 app.listen(PORT, () => {
-    console.log(`🚀 Data server processing directly to formatted_posts_final.json`);
-    console.log(`📡 URL: http://localhost:${PORT}`);
-    console.log(`📁 Saving to: ${FINAL_JSON_PATH}`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📂 Data directory: ${DATA_DIR}`);
 }).on('error', (err) => {
     console.error('❌ Server failed to start:', err.message);
     process.exit(1);

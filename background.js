@@ -1,5 +1,9 @@
 // Background Service Worker for FB Phase-2 Extractor
 
+// Background Service Worker for FB Phase-2 Extractor
+
+const SERVER_URL = 'http://localhost:8080/append-data';
+
 let STATE = {
     posts: [],          // Array of post objects from phase1.json
     index: 0,           // Current post index being processed
@@ -10,7 +14,10 @@ let STATE = {
     tabId: null,        // Current tab ID
     errors: 0,          // Error count
     processed: new Set(), // Set of processed post IDs to prevent duplicates
-    navigationTimeout: null // Failsafe timer
+    processedIds: new Set(), // Set of numeric IDs from server for pre-check
+    navigationTimeout: null, // Failsafe timer
+    countdownTimer: null, // Timer for anti-ban countdown
+    serverTotal: "N/A (Saved on Server)" // Store server total count
 };
 
 // Load saved state on startup
@@ -60,7 +67,7 @@ function sendDataToServer(dataItems) {
         console.log(`🔄 Sending ${dataItems.length} posts to local server...`);
 
         // Send data to local server
-        fetch('http://localhost:8080/append-data', {
+        fetch(SERVER_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -71,15 +78,70 @@ function sendDataToServer(dataItems) {
             .then(data => {
                 if (data.success) {
                     console.log(`✅ Data saved to final.json: ${data.appended} new, ${data.duplicatesSkipped} duplicates skipped, Total: ${data.total}`);
+
+                    // Update state
+                    STATE.serverTotal = data.total;
+
+                    // Broadcast Server Stats to UI
+                    chrome.runtime.sendMessage({
+                        type: "SERVER_STATS",
+                        payload: {
+                            total: data.total,
+                            appended: data.appended,
+                            duplicates: data.duplicatesSkipped,
+                            success: true
+                        }
+                    }).catch(() => { });
+
                 } else {
                     console.error('❌ Server error:', data.error);
+
+                    chrome.runtime.sendMessage({
+                        type: "SERVER_STATS",
+                        payload: { error: data.error, success: false }
+                    }).catch(() => { });
                 }
             })
             .catch(error => {
-                console.error('❌ Failed to save to local server:', error.message);
                 console.log('💡 Make sure the local server is running: npm start');
             });
     }
+}
+
+// Helper: Extract numeric ID from Facebook URL
+function extractNumericId(url) {
+    if (!url) return null;
+    // Matches /posts/123456789 or /permalink/123456789 or /groups/123/user/123/ (no that's user)
+    // Matches /groups/GROUP_ID/posts/POST_ID/
+    const match = url.match(/(?:\/posts\/|\/permalink\/|\/groups\/[^/]+\/user\/)(\d+)/);
+    // If simple check fails, try matching any large number at end of string
+    if (!match) {
+        const simpleMatch = url.match(/(\d+)\/?$/);
+        return simpleMatch ? simpleMatch[1] : null;
+    }
+    return match ? match[1] : null;
+}
+
+// Fetch all processed IDs from server for deduplication
+function fetchServerProcessedIds() {
+    return fetch('http://localhost:8080/get-processed-urls')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && Array.isArray(data.urls)) {
+                const countBefore = STATE.processedIds.size;
+                data.urls.forEach(url => {
+                    const id = extractNumericId(url);
+                    if (id) STATE.processedIds.add(id);
+                });
+                console.log(`📥 Synced ${STATE.processedIds.size} processed IDs from server (New: ${STATE.processedIds.size - countBefore})`);
+                return true;
+            }
+            return false;
+        })
+        .catch(err => {
+            console.error("❌ Failed to sync processed IDs:", err);
+            return false;
+        });
 }
 
 // Periodic auto-save during active scraping
@@ -135,19 +197,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             }
             STATE.running = true;
             STATE.paused = false;
-            // startPeriodicAutoSave(); // REMOVED
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                STATE.tabId = tabs[0].id;
-                chrome.sidePanel.open({ windowId: tabs[0].windowId });
-                nextPost();
-            });
+
+            // Allow async response
+            // sendResponse({ success: true }); // We will send response after sync ? No, keep it responsive.
+            // Actually, we should sync first then start.
+            // But we can't await inside this switch easily without returning true.
+
+            // Let's send success immediately, but start logic async
             sendResponse({ success: true });
+
+            fetchServerProcessedIds().then(() => {
+                chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                    STATE.tabId = tabs[0].id;
+                    chrome.sidePanel.open({ windowId: tabs[0].windowId });
+                    nextPost();
+                });
+            });
             break;
 
         case "PAUSE_PHASE2":
             STATE.paused = true;
             stopPeriodicAutoSave();
             clearNavigationTimeout(); // Don't skip if paused
+            if (STATE.countdownTimer) {
+                clearInterval(STATE.countdownTimer);
+                STATE.countdownTimer = null;
+                // Notify UI that we paused during countdown?
+                chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: 0 }).catch(() => { });
+            }
             sendResponse({ success: true });
             break;
 
@@ -163,6 +240,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             STATE.paused = false;
             stopPeriodicAutoSave();
             clearNavigationTimeout();
+            if (STATE.countdownTimer) {
+                clearInterval(STATE.countdownTimer);
+                STATE.countdownTimer = null;
+            }
             saveState();
             sendResponse({ success: true });
             break;
@@ -247,7 +328,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 paused: STATE.paused,
                 progress: `${STATE.index}/${STATE.posts.length}`,
                 errors: STATE.errors,
-                finalCount: "N/A (Saved on Server)"
+                finalCount: STATE.serverTotal,
+                serverUrl: SERVER_URL
             });
             break;
     }
@@ -334,7 +416,31 @@ function handlePostData(data) {
 
     console.log(`⏳ Waiting ${Math.round(delay / 1000)}s before next post (Anti-ban protection)...`);
 
-    setTimeout(nextPost, delay);
+    startCountdown(delay, nextPost);
+}
+
+// Helper: Start countdown with UI updates
+function startCountdown(durationMs, onComplete) {
+    let remaining = Math.ceil(durationMs / 1000);
+
+    // Clear any existing timer
+    if (STATE.countdownTimer) clearInterval(STATE.countdownTimer);
+
+    // Initial broadcast
+    chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: remaining }).catch(() => { });
+
+    STATE.countdownTimer = setInterval(() => {
+        remaining--;
+
+        // Broadcast update
+        chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: remaining }).catch(() => { });
+
+        if (remaining <= 0) {
+            clearInterval(STATE.countdownTimer);
+            STATE.countdownTimer = null;
+            onComplete();
+        }
+    }, 1000);
 }
 
 // Process next post
@@ -344,14 +450,34 @@ function nextPost() {
     if (STATE.index >= STATE.posts.length) {
         console.log("🎉 Phase-2 completed!");
         stopPeriodicAutoSave(); // Stop periodic auto-save
-        stopPeriodicAutoSave(); // Stop periodic auto-save
         // autoSaveFinal(); // REMOVED
         // downloadFinal(); // REMOVED
         STATE.running = false;
         return;
     }
 
-    const post = STATE.posts[STATE.index++];
+    const post = STATE.posts[STATE.index]; // Don't increment yet, wait until we decide to process
+
+    // Check Deduplication
+    const numericId = extractNumericId(post.post_link);
+    if (numericId && STATE.processedIds.has(numericId)) {
+        console.log(`⏭️ Skipping Duplicate Post: ${numericId}`);
+        // Log to UI
+        chrome.runtime.sendMessage({
+            type: "LOG_MESSAGE",
+            payload: `⏭️ Skipping duplicate: ${numericId}`
+        }).catch(() => { });
+
+        STATE.index++; // Move to next
+        saveState();
+
+        // Immediate next (with small delay to prevent stack overflow loop)
+        setTimeout(nextPost, 10);
+        return;
+    }
+
+    // If we are here, we are processing this post
+    STATE.index++;
     console.log("➡ Loading post:", STATE.index, post.post_link);
 
     // Set 60s failsafe timeout
@@ -361,17 +487,30 @@ function nextPost() {
             console.error("⏳ Timeout detected for post:", post.post_link, "- Moving to next.");
             STATE.errors++;
             saveState();
-            nextPost();
+
+            // Notify UI of Timeout
+            chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Timeout! Skipping..." }).catch(() => { });
+
+            // Use countdown even for timeouts (Anti-ban safety + consistency)
+            const minDelay = 10000;
+            const maxDelay = 30000;
+            const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+            startCountdown(delay, nextPost);
         }
-    }, 60000); // 60 seconds
+    }, 15000); // 15 seconds timeout (Reduced from 60s as per user request)
+
+    // Notify UI: Scraping Started
+    chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Scraping..." }).catch(() => { });
 
     chrome.tabs.update(STATE.tabId, { url: post.post_link }, () => {
         if (chrome.runtime.lastError) {
             console.error("Tab update error:", chrome.runtime.lastError);
             STATE.errors++;
             saveState();
-            // Retry after delay
-            setTimeout(nextPost, 2000);
+            // Retry after delay (Standard countdown)
+            const delay = 5000; // Short 5s delay for errors
+            chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Error! Retrying..." }).catch(() => { });
+            startCountdown(delay, nextPost);
         }
     });
 }
