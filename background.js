@@ -94,7 +94,7 @@ function startPeriodicAutoSave() {
             console.log("⏰ Periodic auto-save triggered...");
             autoSaveFinal();
         }
-    }, 10000); // Auto-save every 10 seconds during active scraping
+    }, 60000); // Auto-save every 10 seconds during active scraping
     console.log("🔄 Periodic auto-save started (every 10 seconds)");
 }
 
