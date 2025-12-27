@@ -93,39 +93,79 @@ Data automatically `data/final.json`-এ save হবে! ✅
 
 The output `final.json` contains an array of objects with this structure:
 
+//comment count from post : `comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.comment_rendering_instance.comments.total_count`
+// commment count alternative : `comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.comments_count_summary_renderer.feedback.comment_rendering_instance.comments.total_count`
+//timestamp
+{
+    "bumpers": null,
+    "tracking": "{\"top_level_post_id\":\"1972504293646858\",\"content_owner_id_new\":\"100047167200721\",\"photo_attachments_list\":[\"1372334451015449\",\"1372334774348750\",\"1372334944348733\",\"1372334564348771\",\"1372334667682094\"],\"photo_id\":\"1372334451015449\",\"story_location\":9,\"story_attachment_style\":\"album\",\"ent_attachement_type\":\"PhotoSetAttachment\",\"page_insights\":{\"571527207077914\":{\"page_id\":\"571527207077914\",\"page_id_type\":\"group\",\"actor_id\":\"100047167200721\",\"dm\":{\"isShare\":0,\"originalPostOwnerID\":0,\"sharedMediaID\":0,\"sharedMediaOwnerID\":0},\"psn\":\"EntGroupMallPostCreationStory\",\"post_context\":{\"object_fbtype\":657,\"publish_time\":1764002902,\"story_name\":\"EntGroupMallPostCreationStory\",\"story_fbid\":[\"1972504293646858\"]},\"role\":1,\"sl\":9}},\"actrs\":\"100047167200721\",\"tds_flgs\":3}",
+    "id": "UzpfSTEwMDA0NzE2NzIwMDcyMTpWSzoxOTcyNTA0MjkzNjQ2ODU4"
+}
+
 ```json
 [
   {
     "post": {
+      "url": "Post URL",
       "id": "post_id",
       "author": "Author Name",
-      "author_id": "author_id",
+      "author_url": "author_url", //facebook url
       "text": "Post content...",
-      "timestamp": 1704067200,
-      "timestamp_readable": "12/31/2023, 12:00:00 PM"
+      "comment_count": "comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.comment_rendering_instance.comments.total_count",
+      "reaction_count": "comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.i18n_reaction_count",
+      "share_count": "comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.i18n_share_count",
+      "Date and time": "comet_sections.context_layout.story.comet_sections.metadata[2].story.creation_time", // if available
+      "Date and time alternative": "comet_sections.timestamp.story.creation_time", // if available    
+      "timestamp": "comet_sections.timestamp.story.creation_time",
+      "timestamp_readable": "12/31/2023, 12:00:00 PM",
+      "attachments": [
+        {
+          "source_type": "attachments[0].media.__typename",
+          "Count": "attachments[0].styles.attachment.all_subattachments.count",
+          "url": "attachments[0].styles.attachment.url",
+        },
+        {
+          "source_type": "attachments[0].styles.attachment.source.text",
+          "url": "attachments[0].styles.attachment.url",
+        },
+        {
+          "ExternalWebLink": "attachments[0].styles.attachment.story_attachment_link_renderer.attachment.web_link.url",
+        }
+      ] // if available
     },
     "comments": [
       {
-        "id": "comment_id",
-        "author": "Commenter Name",
-        "author_id": "commenter_id",
-        "text": "Comment text...",
-        "timestamp": 1704067300,
-        "timestamp_readable": "12/31/2023, 12:01:40 PM",
+        "comment_url": "[0].post.extracted_raw_comments[0].comment_action_links[0].comment.url",
+        "author": "[0].post.extracted_raw_comments[0].author.name",
+        "author_id": "[0].post.extracted_raw_comments[0].author.id",
+        "author_url": "[0].post.extracted_raw_comments[0].author.url",
+        "text": "[0].post.extracted_raw_comments[0].body.text", //
+        "Date and time": "[0].post.extracted_raw_comments[0].created_time", // convert with radable date
+        "timestamp_readable": "[0].post.extracted_raw_comments[0].created_time",
         "replies": [
           {
-            "id": "reply_id",
-            "author": "Replier Name",
-            "author_id": "replier_id",
-            "text": "Reply text...",
-            "timestamp": 1704067400,
-            "timestamp_readable": "12/31/2023, 12:03:20 PM"
+            "comment_url": "[0].post.extracted_raw_comments[0].comment_action_links[0].comment.url",
+        "author": "[0].post.extracted_raw_comments[0].author.name",
+        "author_id": "[0].post.extracted_raw_comments[0].author.id",
+        "author_url": "[0].post.extracted_raw_comments[0].author.url",
+        "text": "[0].post.extracted_raw_comments[0].body.text", //
+        "Date and time": "[0].post.extracted_raw_comments[0].created_time", // convert with radable date
+        "timestamp_readable": "[0].post.extracted_raw_comments[0].created_time",
+        "replies": [
+          "comment_url": "[0].post.extracted_raw_comments[0].comment_action_links[0].comment.url",
+        "author": "[0].post.extracted_raw_comments[0].author.name",
+        "author_id": "[0].post.extracted_raw_comments[0].author.id",
+        "author_url": "[0].post.extracted_raw_comments[0].author.url",
+        "text": "[0].post.extracted_raw_comments[0].body.text", //
+        "Date and time": "[0].post.extracted_raw_comments[0].created_time", // convert with radable date
+        "timestamp_readable": "[0].post.extracted_raw_comments[0].created_time",
+        "replies": []
+        ]
           }
         ]
       }
     ],
-    "url": "https://www.facebook.com/groups/...",
-    "captured_at": "2023-12-31T12:00:00.000Z"
+  
   }
 ]
 ```

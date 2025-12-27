@@ -1,6 +1,5 @@
 // Content Script for FB Phase-2 Extractor
-// Intercepts GraphQL responses and sends the RAW MATCHED post object directly, 
-// AND appends raw comment objects if they are found separately.
+// Intercepts GraphQL responses to extract post data ONLY
 
 console.log("[FB Extractor] Content script START - URL:", window.location.href);
 console.log("[FB Extractor] Content script loaded successfully");
@@ -9,23 +8,19 @@ console.log("[FB Extractor] Content script loaded successfully");
     console.log("[FB Extractor] IIFE starting");
 
     const seenResponses = new Set(); // Prevent duplicate processing
-
-    // State variables
-    let CURRENT_POST_ID = null;
-    let extractedRawPost = null;
-    let extractedRawComments = []; // Array to store raw comment objects found
+    let postData = null;
     let dataSendTimeout = null;
 
     function scheduleDataSend() {
         if (dataSendTimeout) clearTimeout(dataSendTimeout);
 
-        // Send data after 4 seconds of no new activity
+        // Send data after 2 seconds (faster since we don't wait for comments)
         dataSendTimeout = setTimeout(() => {
-            if (extractedRawPost || extractedRawComments.length > 0) {
-                console.log("[FB Extractor] Timeout reached, sending RAW matched post data...");
+            if (postData) {
+                console.log("[FB Extractor] Timeout reached, sending post data");
                 sendDataToBackground();
             }
-        }, 4000);
+        }, 2000);
     }
 
     console.log("[FB Extractor] Variables initialized");
@@ -42,8 +37,8 @@ console.log("[FB Extractor] Content script loaded successfully");
                         processGraphQLResponse(data);
                     } catch (e) { }
                 }
-                // Also check if response contains data of interest
-                if (this.responseText.includes('story') || this.responseText.includes('post') || this.responseText.includes('comment')) {
+                // Also check if response contains post data
+                if (this.responseText.includes('post') || this.responseText.includes('story')) {
                     try {
                         const data = JSON.parse(this.responseText);
                         processGraphQLResponse(data);
@@ -70,7 +65,7 @@ console.log("[FB Extractor] Content script loaded successfully");
             }
             // Also check fetch responses for data
             response.clone().text().then(text => {
-                if (text.includes('story') || text.includes('post') || text.includes('comment')) {
+                if (text.includes('post') || text.includes('story')) {
                     try {
                         const data = JSON.parse(text);
                         processGraphQLResponse(data);
@@ -117,10 +112,9 @@ console.log("[FB Extractor] Content script loaded successfully");
     };
 
     function checkEmbeddedData() {
-        // Check script tags for JSON data
         const scripts = document.querySelectorAll('script');
         scripts.forEach((script) => {
-            if (script.textContent && (script.textContent.includes('story') || script.textContent.includes('post') || script.textContent.includes('comment'))) {
+            if (script.textContent && (script.textContent.includes('post') || script.textContent.includes('story'))) {
                 try {
                     const jsonMatch = script.textContent.match(/(\{.*\}|\[.*\])/s);
                     if (jsonMatch) {
@@ -132,8 +126,22 @@ console.log("[FB Extractor] Content script loaded successfully");
         });
     }
 
+    function extractPostDateFromDOM() {
+        const timeElements = document.querySelectorAll('time, [data-tooltip-content], [aria-label]');
+        for (const el of timeElements) {
+            const datetime = el.getAttribute('datetime') || el.getAttribute('data-tooltip-content') || el.getAttribute('aria-label');
+            if (datetime) {
+                const parsedDate = new Date(datetime);
+                if (!isNaN(parsedDate.getTime())) {
+                    return Math.floor(parsedDate.getTime() / 1000);
+                }
+            }
+        }
+        return null; // Simplified generic date extraction
+    }
+
     function checkElementForData(element) {
-        if (element.textContent && (element.textContent.includes('story') || element.textContent.includes('post') || element.textContent.includes('comment'))) {
+        if (element.textContent && (element.textContent.includes('post') || element.textContent.includes('story'))) {
             try {
                 const data = JSON.parse(element.textContent);
                 processGraphQLResponse(data);
@@ -147,69 +155,35 @@ console.log("[FB Extractor] Content script loaded successfully");
         const responseStr = JSON.stringify(data);
         if (seenResponses.has(responseStr)) return;
         seenResponses.add(responseStr);
+        console.log("🚀 [FULL GRAPHQL RESPONSE]:", data);
 
-        // 1. Extract RAW Post Data (Story Object)
-        if (!extractedRawPost) {
-            const result = extractRawPostData(data);
+        // Extract post data ONLY
+        if (!postData) {
+            const result = extractPostData(data);
             if (result) {
-                extractedRawPost = result;
-                CURRENT_POST_ID = result.id;
-                console.log("👉 [DEBUG] Matched RAW Story Object Found:", result.id);
+                postData = result.post;
+                console.log("👉 [DEBUG] Matched Story Object Found:", postData.id);
                 scheduleDataSend();
             }
         }
-
-        // 2. Extract RAW Comment Objects
-        // We look for any object that has __typename === 'Comment'
-        const commentsFound = [];
-        walkObject(data, (obj) => {
-            if (obj.__typename === "Comment" && obj.id) {
-                // Avoid duplicates if possible, or just raw collect
-                const isDuplicate = extractedRawComments.some(c => c.id === obj.id);
-                if (!isDuplicate) {
-                    extractedRawComments.push(obj);
-                    commentsFound.push(obj);
-                }
-            }
-        });
-
-        if (commentsFound.length > 0) {
-            console.log("👉 [DEBUG] Found", commentsFound.length, "RAW Comment objects");
-            scheduleDataSend();
-        }
-
     }
-
-    // --- Helper Functions ---
 
     function getPostIdFromUrl(url) {
         const match = url.match(/(?:\/posts\/|\/permalink\/|gm\.|fbid=)(\d+)/);
         return match ? match[1] : null;
     }
 
-    function walkObject(obj, callback) {
-        if (!obj || typeof obj !== 'object') return;
-        callback(obj);
-        for (const key in obj) {
-            if (obj.hasOwnProperty(key)) {
-                walkObject(obj[key], callback);
-            }
-        }
-    }
-
-    function extractRawPostData(data) {
-        let foundStory = null;
+    function extractPostData(data) {
+        let result = null;
 
         walkObject(data, (obj) => {
-            if (foundStory) return;
-            // Look for the 'Story' typename or an object that looks like the main story
+            if (result) return;
             if (obj.__typename === 'Story' || obj.story) {
                 const story = obj.story || obj;
                 if (story.id) {
                     const currentUrlId = getPostIdFromUrl(window.location.href);
                     let isMatch = false;
 
-                    // Match logic
                     if (story.id === currentUrlId) isMatch = true;
                     if (!isMatch && story.post_id && story.post_id === currentUrlId) isMatch = true;
                     if (!isMatch && currentUrlId) {
@@ -222,66 +196,99 @@ console.log("[FB Extractor] Content script loaded successfully");
                         isMatch = true;
                     }
 
-                    // Relaxed Match: If on a post page and we haven't found a match, take the first substantial story
-                    if (!isMatch && !extractedRawPost && currentUrlId) {
-                        if (story.message || story.actors || story.comet_sections) {
-                            isMatch = true;
-                            console.log("⚠️ [FB Extractor] Strict ID match failed, using fallback match for:", story.id);
-                        }
+                    if (currentUrlId && !isMatch) {
+                        // console.log(`[FB Extractor] Skipping story ${story.id} because it does not match URL ID ${currentUrlId}`);
+                        return;
                     }
 
                     if (isMatch) {
-                        console.log("🎯 [FULL MATCHED RAW STORY OBJECT]:", story);
-                        // RETURN THE RAW STORY OBJECT DIRECTLY
-                        foundStory = story;
+                        console.log("🎯 [FULL MATCHED STORY OBJECT]:", story);
+                        post = {
+                            id: story.id,
+                            author: story.actors?.[0]?.name || 'Unknown',
+                            author_id: story.actors?.[0]?.id || 'Unknown',
+                            text: cleanText(story.message?.text || ''),
+                            timestamp: story.created_time || story.published_time || story.timestamp || story.creation_time || story.publish_time || story.date || extractPostDateFromDOM() || Date.now() / 1000
+                        };
+
+                        let timestampMs = post.timestamp;
+                        const now = Date.now();
+                        const postTime = post.timestamp * 1000;
+                        if (postTime <= now + (365 * 24 * 60 * 60 * 1000)) {
+                            timestampMs = postTime;
+                        }
+
+                        post.date = new Date(timestampMs).toLocaleString('en-US', {
+                            year: 'numeric', month: '2-digit', day: '2-digit',
+                            hour: '2-digit', minute: '2-digit', second: '2-digit'
+                        });
+                        post.post_type = determinePostType(story);
+                        post.hashtags = extractHashtags(post.text);
+                        post.post_link = window.location.href;
+
+                        // We are strictly NOT extracting comments as per request
+                        post.comment_count = story.comment_count || story.comment_total_count || 0;
+                        post.comments = [];
+
+                        result = { post: post, story: story };
+                        return;
                     }
                 }
             }
         });
 
-        return foundStory;
+        return result;
     }
 
-    // --- Send Function ---
+    function determinePostType(story) {
+        if (story.attachments?.[0]?.media) {
+            const media = story.attachments[0].media;
+            if (media.__typename === 'Photo') return 'image';
+            if (media.__typename === 'Video') return 'video';
+            if (media.__typename === 'Album') return 'album';
+        }
+        if (story.event) return 'event';
+        if (story.poll) return 'poll';
+        if (story.live_video) return 'live';
+        return 'text';
+    }
+
+    function extractHashtags(text) {
+        const hashtagRegex = /#[\w]+/g;
+        const matches = text.match(hashtagRegex);
+        return matches ? matches : [];
+    }
+
+    function walkObject(obj, callback) {
+        if (!obj || typeof obj !== 'object') return;
+        callback(obj);
+        for (const key in obj) {
+            if (obj.hasOwnProperty(key)) {
+                walkObject(obj[key], callback);
+            }
+        }
+    }
+
+    function cleanText(text) {
+        if (!text) return "";
+        return text.replace(/\s+/g, " ").trim();
+    }
 
     function sendDataToBackground() {
+        if (!postData) return;
         if (dataSendTimeout) {
             clearTimeout(dataSendTimeout);
             dataSendTimeout = null;
         }
 
-        // Prepare Final Payload
-        let finalPayload = {};
-
-        if (extractedRawPost) {
-            // If we have a post, use it as the base
-            finalPayload = extractedRawPost;
-
-            // Attach our raw comments array to it, effectively appending them.
-            // We use a specific key so it's clear these are "Appended Raw Comments".
-            // Or as user requested: "post er niche appeand hobe" -> putting them in a list inside the object.
-            finalPayload.extracted_raw_comments = extractedRawComments;
-
-        } else if (extractedRawComments.length > 0) {
-            // No post found yet, but we have comments. Send what we have.
-            console.log("⚠️ Post object missing, sending only raw comments.");
-            finalPayload = {
-                id: CURRENT_POST_ID || "unknown_post_id",
-                missing_post_object: true,
-                extracted_raw_comments: extractedRawComments
-            };
-        } else {
-            return; // Nothing to send
-        }
-
         console.log("---------------------------------------------------------");
-        console.log("📊 [FINAL RAW DATA SENT] (Post + " + extractedRawComments.length + " raw comments):");
-        // console.log(finalPayload); 
+        console.log("📊 [FINAL POST DATA - PASSED] (No Comments):");
+        console.log(JSON.stringify(postData, null, 2));
         console.log("---------------------------------------------------------");
 
         chrome.runtime.sendMessage({
             type: "POST_DATA",
-            payload: finalPayload
+            payload: postData
         });
     }
 
@@ -290,13 +297,8 @@ console.log("[FB Extractor] Content script loaded successfully");
     const pageObserver = new MutationObserver(() => {
         if (window.location.href !== currentUrl) {
             currentUrl = window.location.href;
-
-            // Reset state
-            extractedRawPost = null;
-            extractedRawComments = [];
-            CURRENT_POST_ID = null;
+            postData = null;
             seenResponses.clear();
-
             console.log("[FB Extractor] Page changed, resetting");
         }
     });
