@@ -5,7 +5,8 @@ let STATE = {
     index: 0,           // Current post index being processed
     running: false,     // Is the scraper running?
     paused: false,      // Is it paused?
-    final: [],          // Collected data
+    // final: [],       // REMOVED: No longer storing full data in memory/storage
+
     tabId: null,        // Current tab ID
     errors: 0,          // Error count
     processed: new Set(), // Set of processed post IDs to prevent duplicates
@@ -15,7 +16,7 @@ let STATE = {
 // Load saved state on startup
 chrome.storage.local.get(["phase1", "final", "index", "errors", "processed"], (result) => {
     if (result.phase1) STATE.posts = result.phase1;
-    if (result.final) STATE.final = result.final;
+    // if (result.final) STATE.final = result.final; // REMOVED
     if (result.index !== undefined) STATE.index = result.index;
     if (result.errors !== undefined) STATE.errors = result.errors;
     if (result.processed) STATE.processed = new Set(result.processed);
@@ -23,7 +24,7 @@ chrome.storage.local.get(["phase1", "final", "index", "errors", "processed"], (r
     console.log("📦 State restored:", {
         posts: STATE.posts.length,
         index: STATE.index,
-        final: STATE.final.length,
+        // final: STATE.final.length,
         errors: STATE.errors
     });
 
@@ -37,7 +38,7 @@ chrome.storage.local.get(["phase1", "final", "index", "errors", "processed"], (r
 function saveState() {
     chrome.storage.local.set({
         phase1: STATE.posts,
-        final: STATE.final,
+        // final: STATE.final, // REMOVED: Don't save big data to local storage
         index: STATE.index,
         errors: STATE.errors,
         processed: Array.from(STATE.processed)
@@ -53,9 +54,10 @@ function clearNavigationTimeout() {
 }
 
 // Auto-save final.json via local server
-function autoSaveFinal() {
-    if (STATE.final.length > 0) {
-        console.log(`🔄 Sending ${STATE.final.length} posts to local server...`);
+// Auto-save is now "Send Immediately"
+function sendDataToServer(dataItems) {
+    if (dataItems.length > 0) {
+        console.log(`🔄 Sending ${dataItems.length} posts to local server...`);
 
         // Send data to local server
         fetch('http://localhost:8080/append-data', {
@@ -63,13 +65,12 @@ function autoSaveFinal() {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(STATE.final)
+            body: JSON.stringify(dataItems)
         })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
                     console.log(`✅ Data saved to final.json: ${data.appended} new, ${data.duplicatesSkipped} duplicates skipped, Total: ${data.total}`);
-                    console.log(`📁 File location: ./data/final.json`);
                 } else {
                     console.error('❌ Server error:', data.error);
                 }
@@ -77,26 +78,16 @@ function autoSaveFinal() {
             .catch(error => {
                 console.error('❌ Failed to save to local server:', error.message);
                 console.log('💡 Make sure the local server is running: npm start');
-                console.log('💡 Fallback: Use "Update final.json" button to manually copy data');
             });
-    } else {
-        console.log("⚠️ No data to save");
     }
 }
 
 // Periodic auto-save during active scraping
 let autoSaveInterval = null;
 
-function startPeriodicAutoSave() {
-    if (autoSaveInterval) clearInterval(autoSaveInterval);
-    autoSaveInterval = setInterval(() => {
-        if (STATE.running && !STATE.paused && STATE.final.length > 0) {
-            console.log("⏰ Periodic auto-save triggered...");
-            autoSaveFinal();
-        }
-    }, 60000); // Auto-save every 10 seconds during active scraping
-    console.log("🔄 Periodic auto-save started (every 10 seconds)");
-}
+// Auto-save removed because we send data immediately now
+// Keep interval ONLY for heartbeat or other checks if needed, but not for saving 'final' array.
+console.log("🔄 Auto-save loop removed (Data is sent immediately)");
 
 function stopPeriodicAutoSave() {
     if (autoSaveInterval) {
@@ -112,7 +103,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "LOAD_PHASE1":
             STATE.posts = msg.payload;
             STATE.index = 0;
-            STATE.final = [];
+            // STATE.final = []; // REMOVED
+
             STATE.processed = new Set();
             STATE.errors = 0;
             saveState();
@@ -121,16 +113,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             break;
 
         case "LOAD_FINAL":
-            STATE.final = msg.payload;
+            // STATE.final = msg.payload; // We don't load final data back into memory
             // Rebuild processed set from loaded data
             STATE.processed = new Set();
-            STATE.final.forEach(item => {
-                if (item.post && item.post.id) {
-                    STATE.processed.add(item.post.id);
-                }
-            });
+            if (msg.payload && Array.isArray(msg.payload)) {
+                msg.payload.forEach(item => {
+                    if (item.post && item.post.id) {
+                        STATE.processed.add(item.post.id);
+                    }
+                });
+            }
             saveState();
-            console.log("💾 Final data loaded:", STATE.final.length, "posts, processed set size:", STATE.processed.size);
+            console.log("💾 Final data processed for history, set size:", STATE.processed.size);
             sendResponse({ success: true });
             break;
 
@@ -141,7 +135,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             }
             STATE.running = true;
             STATE.paused = false;
-            startPeriodicAutoSave(); // Start periodic auto-save
+            // startPeriodicAutoSave(); // REMOVED
             chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                 STATE.tabId = tabs[0].id;
                 chrome.sidePanel.open({ windowId: tabs[0].windowId });
@@ -159,7 +153,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
         case "RESUME_PHASE2":
             STATE.paused = false;
-            startPeriodicAutoSave();
+            // startPeriodicAutoSave();
             nextPost();
             sendResponse({ success: true });
             break;
@@ -239,7 +233,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             break;
 
         case "GET_FINAL_DATA":
-            sendResponse({ data: STATE.final });
+            sendResponse({ data: [] }); // We don't have the data anymore
             break;
 
         case "POST_DATA":
@@ -253,7 +247,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 paused: STATE.paused,
                 progress: `${STATE.index}/${STATE.posts.length}`,
                 errors: STATE.errors,
-                finalCount: STATE.final.length
+                finalCount: "N/A (Saved on Server)"
             });
             break;
     }
@@ -292,28 +286,15 @@ function handlePostData(data) {
 
     // Check if post already exists (Duplicate or Update)
     if (STATE.processed.has(postId)) {
-        // Find existing entry index
-        const existingIndex = STATE.final.findIndex(item => item.post && item.post.id === postId);
-
-        if (existingIndex !== -1) {
-            const existingPost = STATE.final[existingIndex];
-            const oldCommentCount = existingPost.post.comments ? existingPost.post.comments.length : 0;
-            const newCommentCount = finalData.post.comments ? finalData.post.comments.length : 0;
-
-            // Update the entry
-            STATE.final[existingIndex] = finalData;
-            saveState();
-
-            console.log(`🔄 Updated post ${postId}: ${oldCommentCount} -> ${newCommentCount} comments`);
-
-            // Auto-save just in case
-            autoSaveFinal();
-
-            // DO NOT call nextPost() here because we already processed this post's navigation 
-            // when we first saw it. Calling it again would skip the next post in the queue.
-            return;
-        }
+        console.log(`⚠️ Post ${postId} already processed. Sending update to server anyway.`);
+        // We just send it to server, let server handle deduplication logic or update logic if it could.
+        // But since we are "appending", we might just send it.
+        // Ideally we should check if we really need to send it.
+        // For now, let's allow re-sending so server can decide (or we just skip).
+        // If you want strict skipping:
+        // return; 
     }
+
 
     // Reference to the post object for timestamp conversion
     const post = finalData.post;
@@ -337,14 +318,14 @@ function handlePostData(data) {
         normalizeCommentDates(post.comments);
     }
 
-    STATE.final.push(finalData);
+    // STATE.final.push(finalData); // REMOVED
     STATE.processed.add(postId);
     saveState();
 
-    console.log(`📊 Data collected: ${STATE.final.length} posts total`);
-    autoSaveFinal(); // Auto-save to downloads folder
+    console.log(`📊 Data collected for post ${postId}`);
+    sendDataToServer([finalData]); // Send IMMEDIATELY to server
 
-    console.log(`✅ Processed: ${STATE.final.length}/${STATE.posts.length}`, postId);
+    console.log(`✅ Processed: ${STATE.index}/${STATE.posts.length}`, postId);
     nextPost();
 }
 
@@ -355,8 +336,9 @@ function nextPost() {
     if (STATE.index >= STATE.posts.length) {
         console.log("🎉 Phase-2 completed!");
         stopPeriodicAutoSave(); // Stop periodic auto-save
-        autoSaveFinal(); // Final auto-save
-        downloadFinal(); // Manual download as well
+        stopPeriodicAutoSave(); // Stop periodic auto-save
+        // autoSaveFinal(); // REMOVED
+        // downloadFinal(); // REMOVED
         STATE.running = false;
         return;
     }
@@ -436,28 +418,8 @@ function processPreviousPost() {
 }
 
 // Download final.json (manual download)
-function downloadFinal() {
-    if (STATE.final.length === 0) {
-        console.log("No data to download");
-        return;
-    }
+// Download function removed - Data is stored on server only
 
-    const blob = new Blob([JSON.stringify(STATE.final, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-
-    chrome.downloads.download({
-        url: url,
-        filename: 'fb-scraper-final-manual.json', // Different filename for manual downloads
-        saveAs: true // Allow user to choose location
-    }, (downloadId) => {
-        if (chrome.runtime.lastError) {
-            console.log("Manual download failed:", chrome.runtime.lastError.message);
-        } else {
-            console.log("Manual download started");
-            URL.revokeObjectURL(url);
-        }
-    });
-}
 
 // Action click to open side panel
 chrome.action.onClicked.addListener(() => {
@@ -465,3 +427,4 @@ chrome.action.onClicked.addListener(() => {
         chrome.sidePanel.open({ windowId: window.id });
     });
 });
+
