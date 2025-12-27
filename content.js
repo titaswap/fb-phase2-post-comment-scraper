@@ -6,6 +6,88 @@ console.log("[FB Extractor] Content script START - URL:", window.location.href);
 console.log("[FB Extractor] Content script loaded successfully");
 
 (function () {
+    function enableLiteMode() {
+        if (document.getElementById("fb-lite-mode-style")) return;
+
+        /* =========================
+           1️⃣ CSS LITE MODE
+        ========================= */
+        const style = document.createElement("style");
+        style.id = "fb-lite-mode-style";
+        style.textContent = `
+        /* ---- Hide heavy UI ---- */
+        [role="navigation"],
+        [data-pagelet^="LeftRail"],
+        [data-pagelet^="RightRail"],
+        [data-pagelet^="Stories"],
+        [data-pagelet^="Reels"],
+        [data-pagelet^="Chat"],
+        [data-pagelet^="VideoChat"],
+        [aria-label="Create a post"],
+        iframe,
+        video {
+            display: none !important;
+        }
+
+        /* ---- Kill animations & transitions ---- */
+        * {
+            animation: none !important;
+            transition: none !important;
+            scroll-behavior: auto !important;
+        }
+
+        /* ---- Reduce image cost ---- */
+        img {
+            max-height: 900px !important;
+        }
+    `;
+        document.documentElement.appendChild(style);
+
+        /* =========================
+           2️⃣ RUNTIME DOM CLEANUP
+        ========================= */
+        const cleanupInterval = setInterval(() => {
+            // Remove videos that load later
+            document.querySelectorAll("video").forEach(v => v.remove());
+
+            // Remove chat, stories, reels that appear dynamically
+            document.querySelectorAll(
+                '[data-pagelet^="Chat"], [data-pagelet^="Stories"], [data-pagelet^="Reels"], iframe'
+            ).forEach(el => el.remove());
+
+            // Make images lighter
+            document.querySelectorAll("img").forEach(img => {
+                img.loading = "lazy";
+                img.decoding = "async";
+            });
+
+        }, 3000);
+
+        /* =========================
+           3️⃣ POST-FOCUSED MODE (Phase-2)
+        ========================= */
+        setTimeout(() => {
+            const articles = document.querySelectorAll('[role="article"]');
+            if (articles.length > 1) {
+                articles.forEach((el, i) => {
+                    if (i < articles.length - 1) el.remove();
+                });
+            }
+        }, 5000);
+
+        console.log("⚡ FB Lite Mode ENABLED");
+
+        // return cleanup handler if ever needed
+        return () => clearInterval(cleanupInterval);
+    }
+    document.addEventListener("DOMContentLoaded", enableLiteMode);
+    enableLiteMode();
+
+
+
+
+
+
     console.log("[FB Extractor] IIFE starting");
 
     const seenResponses = new Set(); // Prevent duplicate processing

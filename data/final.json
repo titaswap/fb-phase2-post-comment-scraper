@@ -1,1 +1,62 @@
-[]
+function extractUrlsSmart(data) {
+    const results = new Set();
+
+    // ❌ skip these structural paths (preview-only images)
+    const BLOCKED_PATHS = [
+        "large_share_image",
+        "flexible_height_share_image"
+    ];
+
+    // ❌ block CDN image domains (but NOT facebook photo pages)
+    const BLOCKED_DOMAINS = [
+        "fbcdn.net",
+        "external."
+    ];
+
+    function isBlockedPath(path) {
+        return BLOCKED_PATHS.some(p => path.includes(p));
+    }
+
+    function isValidUrl(url) {
+        if (typeof url !== "string") return false;
+        if (!url.startsWith("http")) return false;
+
+        // block fb image CDN but allow facebook photo pages
+        if (
+            BLOCKED_DOMAINS.some(d => url.includes(d)) &&
+            !url.includes("facebook.com/photo") &&
+            !url.includes("facebook.com/photos")
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function deepScan(obj, path = "") {
+        if (!obj || typeof obj !== "object") return;
+
+        for (const key in obj) {
+            const value = obj[key];
+            const currentPath = path ? `${path}.${key}` : key;
+
+            // ⛔ skip preview image containers
+            if (isBlockedPath(currentPath)) continue;
+
+            // ✅ collect url
+            if (key === "url" && isValidUrl(value)) {
+                results.add(value);
+            }
+
+            // recurse
+            if (typeof value === "object") {
+                deepScan(value, currentPath);
+            }
+        }
+    }
+
+    deepScan(data);
+
+    return Array.from(results);
+}
+extractUrlsSmart(data)

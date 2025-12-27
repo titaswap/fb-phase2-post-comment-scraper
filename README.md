@@ -14,7 +14,7 @@ npm install
 npm start
 ```
 
-Server `http://localhost:3000` এ run হবে এবং `data/final.json` ফাইল manage করবে।
+Server `http://localhost:8080` এ run হবে এবং `data/final.json` ফাইল manage করবে।
 
 ### 3. Chrome Extension Load করুন
 1. Chrome-এ `chrome://extensions/` যান

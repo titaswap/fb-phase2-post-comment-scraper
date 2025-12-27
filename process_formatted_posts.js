@@ -3,6 +3,62 @@ const fs = require('fs');
 // Configuration
 const INPUT_FILE = './data/final.json';
 const OUTPUT_FILE = './data/formatted_posts_final.json';
+function getSafeAttachmentUrl(att) {
+    const BLOCKED_PATHS = [
+        "large_share_image",
+        "flexible_height_share_image"
+    ];
+
+    const BLOCKED_DOMAINS = [
+        "fbcdn.net",
+        "external."
+    ];
+
+    function isBlockedPath(path) {
+        return BLOCKED_PATHS.some(p => path.includes(p));
+    }
+
+    function isValidUrl(url) {
+        if (typeof url !== "string") return false;
+        if (!url.startsWith("http")) return false;
+
+        // block fb image CDN but allow facebook photo pages
+        if (
+            BLOCKED_DOMAINS.some(d => url.includes(d)) &&
+            !url.includes("facebook.com/photo") &&
+            !url.includes("facebook.com/photos")
+        ) {
+            return false;
+        }
+        return true;
+    }
+
+    let foundUrl = null;
+
+    function deepScan(obj, path = "") {
+        if (!obj || typeof obj !== "object" || foundUrl) return;
+
+        for (const key in obj) {
+            const val = obj[key];
+            const currentPath = path ? `${path}.${key}` : key;
+
+            // ⛔ skip preview image containers
+            if (isBlockedPath(currentPath)) continue;
+
+            if (key === "url" && isValidUrl(val)) {
+                foundUrl = val;
+                return;
+            }
+
+            if (typeof val === "object") {
+                deepScan(val, currentPath);
+            }
+        }
+    }
+
+    deepScan(att);
+    return foundUrl;
+}
 
 // --- Safe Access Helper ---
 function getSafe(fn, defaultVal) {
@@ -215,28 +271,54 @@ function processRawData(allItems) {
         if (!creationTime) creationTime = story.created_time || story.publish_time || 0;
 
         const attachmentsArr = story.attachments
-            || getNestedValue(story, "attachments") // Or any other location
+            || getNestedValue(story, "attachments")
             || [];
 
         const formattedAttachments = attachmentsArr.map(att => {
-            const webLink = getNestedValue(att, "styles.attachment.story_attachment_link_renderer.attachment.web_link.url");
+
+            // 1️⃣ Highest priority: External web link
+            const webLink = getNestedValue(
+                att,
+                "styles.attachment.story_attachment_link_renderer.attachment.web_link.url"
+            );
+
             if (webLink) {
                 return { "ExternalWebLink": webLink };
             }
-            const sourceText = getNestedValue(att, "styles.attachment.source.text");
-            const attachmentUrl = getNestedValue(att, "styles.attachment.url");
-            if (sourceText) {
+
+            // 2️⃣ Try smart deep scan (🔥 new logic)
+            const smartUrl = getSafeAttachmentUrl(
+                getNestedValue(att, "styles.attachment")
+            );
+
+            if (smartUrl) {
                 return {
-                    "source_type": sourceText,
-                    "url": attachmentUrl
+                    source_type: getNestedValue(att, "styles.attachment.source.text")
+                        || getNestedValue(att, "media.__typename")
+                        || "unknown",
+                    url: smartUrl
                 };
             }
+
+            // 3️⃣ Fallback (your existing logic)
+            const sourceText = getNestedValue(att, "styles.attachment.source.text");
+            const attachmentUrl = getNestedValue(att, "styles.attachment.url");
+
+            if (sourceText || attachmentUrl) {
+                return {
+                    source_type: sourceText || "unknown",
+                    url: attachmentUrl || null
+                };
+            }
+
+            // 4️⃣ Final fallback (count / typename only)
             return {
-                "source_type": getNestedValue(att, "media.__typename"),
-                "Count": getNestedValue(att, "styles.attachment.all_subattachments.count"),
-                "url": attachmentUrl
+                source_type: getNestedValue(att, "media.__typename"),
+                Count: getNestedValue(att, "styles.attachment.all_subattachments.count"),
+                url: null
             };
         });
+
 
         let postText = cleanText(
             story.message?.text ||
