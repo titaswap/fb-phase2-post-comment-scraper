@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
+const { processRawData } = require('../process_formatted_posts');
 
 const app = express();
 const PORT = 8080;
@@ -10,24 +11,29 @@ const PORT = 8080;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Path to final.json
-const FINAL_JSON_PATH = path.join(__dirname, '..', 'data', 'final.json');
+// Path to formatted_posts_final.json
+const FINAL_JSON_PATH = path.join(__dirname, '..', 'data', 'formatted_posts_final.json');
 
 // Ensure data directory exists
 if (!fs.existsSync(path.join(__dirname, '..', 'data'))) {
     fs.mkdirSync(path.join(__dirname, '..', 'data'));
 }
 
-// Initialize final.json if it doesn't exist
+// Initialize file if it doesn't exist
 if (!fs.existsSync(FINAL_JSON_PATH)) {
     fs.writeFileSync(FINAL_JSON_PATH, '[]');
-    console.log('✅ Created final.json file');
+    console.log('✅ Created formatted_posts_final.json file');
 }
 
-// Route to append data to final.json
+// Route to process and append data
 app.post('/append-data', (req, res) => {
     try {
-        const newData = req.body;
+        const rawData = req.body;
+        console.log(`📥 Received ${Array.isArray(rawData) ? rawData.length : 1} raw items`);
+
+        // Process the raw data immediately
+        const processedNewData = processRawData(rawData);
+        console.log(`🔄 Processed into ${processedNewData.length} formatted posts`);
 
         // Read existing data
         let existingData = [];
@@ -44,9 +50,10 @@ app.post('/append-data', (req, res) => {
 
         // Check for duplicates (by post ID)
         const existingIds = new Set(existingData.map(item => item.post?.id).filter(id => id));
-        const filteredNewData = newData.filter(item => {
+
+        const filteredNewData = processedNewData.filter(item => {
             const postId = item.post?.id;
-            if (!postId) return true; // Keep items without ID
+            if (!postId) return true; // Keep items without ID (rare)
             if (existingIds.has(postId)) {
                 console.log(`⚠️ Skipping duplicate post: ${postId}`);
                 return false;
@@ -54,18 +61,27 @@ app.post('/append-data', (req, res) => {
             return true;
         });
 
+        if (filteredNewData.length === 0) {
+            console.log('ℹ️ No new data to append after duplicate check');
+            return res.json({
+                success: true,
+                appended: 0,
+                message: "No new posts to add"
+            });
+        }
+
         // Append new data
         const updatedData = [...existingData, ...filteredNewData];
 
         // Write back to file
         fs.writeFileSync(FINAL_JSON_PATH, JSON.stringify(updatedData, null, 2));
 
-        console.log(`✅ Appended ${filteredNewData.length} new posts to final.json (Total: ${updatedData.length})`);
+        console.log(`✅ Appended ${filteredNewData.length} new processed posts to formatted_posts_final.json (Total: ${updatedData.length})`);
 
         res.json({
             success: true,
             appended: filteredNewData.length,
-            duplicatesSkipped: newData.length - filteredNewData.length,
+            duplicatesSkipped: processedNewData.length - filteredNewData.length,
             total: updatedData.length
         });
 
@@ -92,7 +108,7 @@ app.get('/get-data', (req, res) => {
 app.post('/clear-data', (req, res) => {
     try {
         fs.writeFileSync(FINAL_JSON_PATH, '[]');
-        console.log('🗑️ Cleared final.json');
+        console.log('🗑️ Cleared formatted_posts_final.json');
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -105,25 +121,10 @@ app.get('/health', (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 Data server running on http://localhost:${PORT}`);
-    console.log(`📁 final.json location: ${FINAL_JSON_PATH}`);
-    console.log(`📊 Endpoints:`);
-    console.log(`   POST /append-data - Append new data`);
-    console.log(`   GET  /get-data    - Get current data`);
-    console.log(`   POST /clear-data  - Clear all data`);
-    console.log(`   GET  /health      - Health check`);
+    console.log(`🚀 Data server processing directly to formatted_posts_final.json`);
+    console.log(`📡 URL: http://localhost:${PORT}`);
+    console.log(`📁 Saving to: ${FINAL_JSON_PATH}`);
 }).on('error', (err) => {
     console.error('❌ Server failed to start:', err.message);
-    process.exit(1);
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-    console.error('❌ Uncaught Exception:', err.message);
-    process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
     process.exit(1);
 });

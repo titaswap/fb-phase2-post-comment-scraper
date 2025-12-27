@@ -171,131 +171,122 @@ function findCommentsArray(obj) {
     return null;
 }
 
+// --- Main Processing Function (Exportable) ---
+function processRawData(allItems) {
+    if (!Array.isArray(allItems)) allItems = [allItems];
+    const processedIds = new Set();
+
+    return allItems.map(item => {
+        let story = null;
+        let rawComments = null;
+
+        if (item.post && item.post.id) {
+            story = item.post;
+            // Try direct access first
+            rawComments = item.extracted_raw_comments || item.post.extracted_raw_comments;
+        } else if (item.id) {
+            story = item;
+            rawComments = item.extracted_raw_comments;
+        }
+
+        // Fallback: Use deep search if specific key is missing but comments might be elsewhere
+        if (!rawComments) {
+            rawComments = findCommentsArray(item);
+        }
+
+        if (!rawComments) rawComments = [];
+
+        if (!story) return null;
+        if (processedIds.has(story.id)) return null; // Skip duplicates within this batch
+        processedIds.add(story.id);
+
+        // --- Post Fields ---
+        const commentCount = getNestedValue(story, "comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.comment_rendering_instance.comments.total_count")
+            || story.comment_count || story.feedback?.comments?.total_count || 0;
+
+        const reactionCount = getNestedValue(story, "comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.i18n_reaction_count")
+            || story.feedback?.reaction_count?.count || 0;
+
+        const shareCount = getNestedValue(story, "comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.i18n_share_count")
+            || story.feedback?.share_count?.count || 0;
+
+        let creationTime = getNestedValue(story, "comet_sections.timestamp.story.creation_time");
+        if (!creationTime) creationTime = getNestedValue(story, "comet_sections.context_layout.story.comet_sections.metadata[0].story.creation_time");
+        if (!creationTime) creationTime = story.created_time || story.publish_time || 0;
+
+        const attachmentsArr = story.attachments
+            || getNestedValue(story, "attachments") // Or any other location
+            || [];
+
+        const formattedAttachments = attachmentsArr.map(att => {
+            const webLink = getNestedValue(att, "styles.attachment.story_attachment_link_renderer.attachment.web_link.url");
+            if (webLink) {
+                return { "ExternalWebLink": webLink };
+            }
+            const sourceText = getNestedValue(att, "styles.attachment.source.text");
+            const attachmentUrl = getNestedValue(att, "styles.attachment.url");
+            if (sourceText) {
+                return {
+                    "source_type": sourceText,
+                    "url": attachmentUrl
+                };
+            }
+            return {
+                "source_type": getNestedValue(att, "media.__typename"),
+                "Count": getNestedValue(att, "styles.attachment.all_subattachments.count"),
+                "url": attachmentUrl
+            };
+        });
+
+        let postText = cleanText(
+            story.message?.text ||
+            getNestedValue(story, "comet_sections.message.story.message.text") ||
+            getNestedValue(story, "comet_sections.content.story.comet_sections.message.story.message.text") ||
+            ""
+        );
+
+        if (!postText) {
+            const richMessage = getNestedValue(story, "comet_sections.content.story.comet_sections.message.rich_message");
+            if (Array.isArray(richMessage)) {
+                postText = richMessage.map(part => part.text).join(' ');
+            }
+        }
+
+        const postData = {
+            url: story.url || story.wwwURL ||
+                getNestedValue(story, "comet_sections.content.story.wwwURL") ||
+                getNestedValue(story, "comet_sections.context_layout.story.comet_sections.metadata[0].override_url") ||
+                getNestedValue(story, "comet_sections.context_layout.story.comet_sections.metadata[0].story.url") ||
+                getNestedValue(story, "comet_sections.content.story.comet_sections.message.story.url") || "",
+            id: story.id,
+            author: story.actors?.[0]?.name || "Unknown",
+            author_url: story.actors?.[0]?.url || "",
+            text: postText,
+            comment_count: commentCount,
+            reaction_count: reactionCount,
+            share_count: shareCount,
+            "Date and time": getFormattedDate(creationTime),
+            attachments: formattedAttachments
+        };
+
+        const processedComments = processComments(rawComments);
+        const finalComments = deduplicateComments(processedComments);
+
+        return {
+            post: postData,
+            comments: finalComments
+        };
+
+    }).filter(p => p !== null);
+}
 
 function processAllPosts() {
     try {
         console.log(`Reading raw data from ${INPUT_FILE}...`);
         const rawData = fs.readFileSync(INPUT_FILE, 'utf8');
         let allItems = JSON.parse(rawData);
-        if (!Array.isArray(allItems)) allItems = [allItems];
-        console.log(`Processing ${allItems.length} items...`);
 
-        const processedIds = new Set();
-
-        const formattedPosts = allItems.map(item => {
-            let story = null;
-            let rawComments = null;
-
-            if (item.post && item.post.id) {
-                story = item.post;
-                // Try direct access first
-                rawComments = item.extracted_raw_comments || item.post.extracted_raw_comments;
-            } else if (item.id) {
-                story = item;
-                rawComments = item.extracted_raw_comments;
-            }
-
-            // Fallback: Use deep search if specific key is missing but comments might be elsewhere
-            if (!rawComments) {
-                // Caution: simple findCommentsArray might return the post itself if heuristics are weak, 
-                // but we put safeguards in findCommentsArray (isPost check).
-                // Searching inside 'item' might be too broad if item IS a post list, but here 'item' is one post object.
-                rawComments = findCommentsArray(item);
-            }
-
-            if (!rawComments) rawComments = [];
-
-            if (!story) return null;
-            if (processedIds.has(story.id)) return null; // Skip duplicates
-            processedIds.add(story.id);
-
-            // --- Post Fields ---
-            const commentCount = getNestedValue(story, "comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.comment_rendering_instance.comments.total_count")
-                || story.comment_count || story.feedback?.comments?.total_count || 0;
-
-            const reactionCount = getNestedValue(story, "comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.i18n_reaction_count")
-                || story.feedback?.reaction_count?.count || 0;
-
-            const shareCount = getNestedValue(story, "comet_sections.feedback.story.story_ufi_container.story.feedback_context.feedback_target_with_context.comet_ufi_summary_and_actions_renderer.feedback.i18n_share_count")
-                || story.feedback?.share_count?.count || 0;
-
-            let creationTime = getNestedValue(story, "comet_sections.timestamp.story.creation_time");
-            if (!creationTime) creationTime = getNestedValue(story, "comet_sections.context_layout.story.comet_sections.metadata[0].story.creation_time");
-            if (!creationTime) creationTime = story.created_time || story.publish_time || 0;
-
-            const attachmentsArr = story.attachments
-                || getNestedValue(story, "attachments") // Or any other location
-                || [];
-
-            const formattedAttachments = attachmentsArr.map(att => {
-                // 1. External Web Link
-                const webLink = getNestedValue(att, "styles.attachment.story_attachment_link_renderer.attachment.web_link.url");
-                if (webLink) {
-                    return { "ExternalWebLink": webLink };
-                }
-
-                // 2. PDF / Document
-                const sourceText = getNestedValue(att, "styles.attachment.source.text");
-                const attachmentUrl = getNestedValue(att, "styles.attachment.url");
-                if (sourceText) {
-                    return {
-                        "source_type": sourceText,
-                        "url": attachmentUrl
-                    };
-                }
-
-                // 3. Image / Default
-                return {
-                    "source_type": getNestedValue(att, "media.__typename"),
-                    "Count": getNestedValue(att, "styles.attachment.all_subattachments.count"),
-                    "url": attachmentUrl
-                };
-            });
-
-            // Construct text logic
-            let postText = cleanText(
-                story.message?.text ||
-                getNestedValue(story, "comet_sections.message.story.message.text") ||
-                getNestedValue(story, "comet_sections.content.story.comet_sections.message.story.message.text") ||
-                ""
-            );
-
-            // If empty, try rich message
-            if (!postText) {
-                const richMessage = getNestedValue(story, "comet_sections.content.story.comet_sections.message.rich_message");
-                if (Array.isArray(richMessage)) {
-                    postText = richMessage.map(part => part.text).join(' ');
-                }
-            }
-
-
-            const postData = {
-                url: story.url || story.wwwURL ||
-                    getNestedValue(story, "comet_sections.content.story.wwwURL") ||
-                    getNestedValue(story, "comet_sections.context_layout.story.comet_sections.metadata[0].override_url") ||
-                    getNestedValue(story, "comet_sections.context_layout.story.comet_sections.metadata[0].story.url") ||
-                    getNestedValue(story, "comet_sections.content.story.comet_sections.message.story.url") || "",
-                id: story.id,
-                author: story.actors?.[0]?.name || "Unknown",
-                author_url: story.actors?.[0]?.url || "",
-                text: postText,
-                comment_count: commentCount,
-                reaction_count: reactionCount,
-                share_count: shareCount,
-                "Date and time": getFormattedDate(creationTime),
-                attachments: formattedAttachments
-            };
-
-            // --- Process Comments ---
-            const processedComments = processComments(rawComments);
-            const finalComments = deduplicateComments(processedComments);
-
-            return {
-                post: postData,
-                comments: finalComments
-            };
-
-        }).filter(p => p !== null);
+        const formattedPosts = processRawData(allItems);
 
         fs.writeFileSync(OUTPUT_FILE, JSON.stringify(formattedPosts, null, 2), 'utf8');
         console.log(`✅ Success! Data saved to ${OUTPUT_FILE}`);
@@ -306,4 +297,10 @@ function processAllPosts() {
     }
 }
 
-processAllPosts();
+// Export for use in server
+module.exports = { processRawData };
+
+// Run if called directly
+if (require.main === module) {
+    processAllPosts();
+}

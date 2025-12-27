@@ -326,7 +326,15 @@ function handlePostData(data) {
     sendDataToServer([finalData]); // Send IMMEDIATELY to server
 
     console.log(`✅ Processed: ${STATE.index}/${STATE.posts.length}`, postId);
-    nextPost();
+
+    // Anti-ban system: Random delay before next post
+    const minDelay = 10000; // 10 seconds
+    const maxDelay = 30000; // 30 seconds
+    const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+
+    console.log(`⏳ Waiting ${Math.round(delay / 1000)}s before next post (Anti-ban protection)...`);
+
+    setTimeout(nextPost, delay);
 }
 
 // Process next post
@@ -427,4 +435,3 @@ chrome.action.onClicked.addListener(() => {
         chrome.sidePanel.open({ windowId: window.id });
     });
 });
-
