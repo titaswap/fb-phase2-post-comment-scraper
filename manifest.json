@@ -17,6 +17,12 @@
     "default_path": "sidepanel.html"
   },
   "action": {
-    "default_title": "Open FB Scraper"
+    "default_title": "Open FB Scraper",
+    "default_icon": "icons/image2.png"
+  },
+  "icons": {
+    "16": "icons/image2.png",
+    "48": "icons/image2.png",
+    "128": "icons/image2.png"
   }
 }
