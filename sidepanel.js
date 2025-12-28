@@ -24,7 +24,7 @@ const updateUI = (status) => {
     finalCountEl.textContent = `Collected: ${status.finalCount}`;
 
     // Update Server Info
-    const serverEl = document.getElementById("server-info");
+    const serverEl = document.getElementById("server-url");
     if (serverEl && status.serverUrl) {
         serverEl.textContent = `Target: ${status.serverUrl}`;
     }
@@ -58,6 +58,22 @@ const updateUI = (status) => {
     document.getElementById("start-index-input").disabled = inputsDisabled;
     document.getElementById("file").disabled = inputsDisabled;
     document.getElementById("final-file").disabled = inputsDisabled;
+    document.getElementById("safe-mode-toggle").disabled = isRunning; // Disable toggle while running
+
+    // Update Safe Mode Toggle UI
+    if (status.safeMode !== undefined) {
+        document.getElementById("safe-mode-toggle").checked = status.safeMode;
+    }
+};
+
+// Toggle Safe Mode Listener
+document.getElementById("safe-mode-toggle").onchange = (e) => {
+    const isChecked = e.target.checked;
+    chrome.runtime.sendMessage({ type: "TOGGLE_SAFE_MODE", payload: isChecked }, (response) => {
+        if (response && response.success) {
+            log(isChecked ? "🛡️ Safe Mode Enabled (30s-60s delay)" : "⚡ Safe Mode Disabled (10s-30s delay)");
+        }
+    });
 };
 
 // Load initial status
@@ -214,16 +230,7 @@ document.getElementById("set-index-btn").onclick = () => {
     });
 };
 
-// Download final.json handler
-document.getElementById("download").onclick = () => {
-    chrome.runtime.sendMessage({ type: "DOWNLOAD_FINAL" }, (response) => {
-        if (response.success) {
-            log("💾 Final data downloaded");
-        } else {
-            log("❌ Failed to download final data");
-        }
-    });
-};
+
 
 // Update final.json handler (opens data in new tab for manual copy-paste)
 document.getElementById("update-final").onclick = () => {
@@ -306,3 +313,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         log(msg.payload);
     }
 });
+
+// --- Server Health Check ---
+const healthEl = document.getElementById("server-health");
+
+async function checkServerHealth() {
+    if (!healthEl) return;
+
+    try {
+        // Short timeout to detect offline status quickly
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+        const response = await fetch("http://localhost:8080/health", {
+            method: 'GET',
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+            healthEl.textContent = "● Online";
+            healthEl.className = "online";
+        } else {
+            throw new Error("Not OK");
+        }
+    } catch (error) {
+        healthEl.textContent = "● Offline";
+        healthEl.className = "offline";
+    }
+}
+
+// Check health every 5 seconds
+setInterval(checkServerHealth, 5000);
+// Check immediately on load
+checkServerHealth();

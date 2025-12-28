@@ -57,28 +57,27 @@ console.log("[FB Extractor] Content script loaded successfully");
     // Intercept fetch
     console.log("[FB Extractor] Setting up fetch interception");
     const originalFetch = window.fetch;
-    window.fetch = function (...args) {
+    window.fetch = async function (...args) {
         const url = args[0];
-        return originalFetch.apply(this, args).then(response => {
-            if (args[0] && typeof args[0] === 'string' && (args[0].includes('graphql') || args[0].includes('facebook.com/api') || args[0].includes('graph.facebook.com'))) {
-                response.clone().text().then(text => {
-                    try {
-                        const data = JSON.parse(text);
-                        processGraphQLResponse(data);
-                    } catch (e) { }
-                });
-            }
-            // Also check fetch responses for data
+        const response = await originalFetch.apply(this, args);
+        if (args[0] && typeof args[0] === 'string' && (args[0].includes('graphql') || args[0].includes('facebook.com/api') || args[0].includes('graph.facebook.com'))) {
             response.clone().text().then(text => {
-                if (text.includes('story') || text.includes('post') || text.includes('comment')) {
-                    try {
-                        const data = JSON.parse(text);
-                        processGraphQLResponse(data);
-                    } catch (e) { }
-                }
+                try {
+                    const data = JSON.parse(text);
+                    processGraphQLResponse(data);
+                } catch (e) { }
             });
-            return response;
+        }
+        // Also check fetch responses for data
+        response.clone().text().then(text_2 => {
+            if (text_2.includes('story') || text_2.includes('post') || text_2.includes('comment')) {
+                try {
+                    const data_2 = JSON.parse(text_2);
+                    processGraphQLResponse(data_2);
+                } catch (e_1) { }
+            }
         });
+        return response;
     };
 
     console.log("[FB Extractor] All interceptions set up successfully");
@@ -86,7 +85,7 @@ console.log("[FB Extractor] Content script loaded successfully");
     // Wait for DOM to be ready before setting up observers
     function setupDOMObservers() {
         if (!document.body) {
-            setTimeout(setupDOMObservers, 100);
+            setTimeout(setupDOMObservers, 500);
             return;
         }
 

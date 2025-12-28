@@ -129,41 +129,70 @@ app.post('/append-data', (req, res) => {
             existingData = [];
         }
 
-        // Check for duplicates (by post ID)
-        const existingIds = new Set(existingData.map(item => item.post?.id).filter(id => id));
+        // Merge Strategy: Update existing posts with new comments or add new posts
+        let updatedCount = 0;
+        let appendedCount = 0;
 
-        const filteredNewData = processedNewData.filter(item => {
-            const postId = item.post?.id;
-            if (!postId) return true; // Keep items without ID (rare)
-            if (existingIds.has(postId)) {
-                console.log(`⚠️ Skipping duplicate post: ${postId}`);
-                return false;
+        processedNewData.forEach(newItem => {
+            const newItemId = newItem.post?.id;
+            if (!newItemId) {
+                // No ID, treat as new (rare)
+                existingData.push(newItem);
+                appendedCount++;
+                return;
             }
-            return true;
+
+            const existingIndex = existingData.findIndex(item => item.post?.id === newItemId);
+
+            if (existingIndex !== -1) {
+                // Post exists! Merge comments.
+                const existingItem = existingData[existingIndex];
+                const existingComments = existingItem.comments || [];
+                const newComments = newItem.comments || [];
+
+                // Comment Deduplication Map
+                const commentMap = new Map();
+
+                // Add existing comments to map
+                existingComments.forEach(c => commentMap.set(c.id, c));
+
+                // Add NEW comments to map (overwriting if ID matches, or adding if new)
+                let addedComments = 0;
+                newComments.forEach(c => {
+                    if (!commentMap.has(c.id)) {
+                        commentMap.set(c.id, c);
+                        addedComments++;
+                    }
+                });
+
+                if (addedComments > 0) {
+                    console.log(`🔄 Merging ${addedComments} new comments into existing Post ${newItemId}`);
+                    // Convert map back to array
+                    existingItem.comments = Array.from(commentMap.values());
+                    // Update the item in the main array
+                    existingData[existingIndex] = existingItem;
+                    updatedCount++;
+                } else {
+                    console.log(`ℹ️ Post ${newItemId} exists but no new unique comments found.`);
+                }
+
+            } else {
+                // New Post
+                existingData.push(newItem);
+                appendedCount++;
+            }
         });
 
-        if (filteredNewData.length === 0) {
-            console.log('ℹ️ No new data to append to formatted file after duplicate check');
-            return res.json({
-                success: true,
-                appended: 0,
-                message: "No new posts to add"
-            });
-        }
-
-        // Append new data
-        const updatedData = [...existingData, ...filteredNewData];
-
         // Write back to file
-        fs.writeFileSync(FINAL_JSON_PATH, JSON.stringify(updatedData, null, 2));
+        fs.writeFileSync(FINAL_JSON_PATH, JSON.stringify(existingData, null, 2));
 
-        console.log(`✅ Appended ${filteredNewData.length} new processed posts to formatted_posts_final.json (Total: ${updatedData.length})`);
+        console.log(`✅ Sync Complete: Appended ${appendedCount} new posts, Updated ${updatedCount} existing posts. Total: ${existingData.length}`);
 
         res.json({
             success: true,
-            appended: filteredNewData.length,
-            duplicatesSkipped: processedNewData.length - filteredNewData.length,
-            total: updatedData.length
+            appended: appendedCount,
+            updated: updatedCount,
+            total: existingData.length
         });
 
     } catch (error) {

@@ -17,7 +17,8 @@ let STATE = {
     processedIds: new Set(), // Set of numeric IDs from server for pre-check
     navigationTimeout: null, // Failsafe timer
     countdownTimer: null, // Timer for anti-ban countdown
-    serverTotal: "N/A (Saved on Server)" // Store server total count
+    serverTotal: "N/A (Saved on Server)", // Store server total count
+    safeMode: false // Safe Mode state
 };
 
 // Load saved state on startup
@@ -27,6 +28,7 @@ chrome.storage.local.get(["phase1", "final", "index", "errors", "processed"], (r
     if (result.index !== undefined) STATE.index = result.index;
     if (result.errors !== undefined) STATE.errors = result.errors;
     if (result.processed) STATE.processed = new Set(result.processed);
+    if (result.safeMode !== undefined) STATE.safeMode = result.safeMode;
 
     console.log("📦 State restored:", {
         posts: STATE.posts.length,
@@ -48,7 +50,8 @@ function saveState() {
         // final: STATE.final, // REMOVED: Don't save big data to local storage
         index: STATE.index,
         errors: STATE.errors,
-        processed: Array.from(STATE.processed)
+        processed: Array.from(STATE.processed),
+        safeMode: STATE.safeMode
     });
 }
 
@@ -277,10 +280,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             sendResponse({ success: true });
             break;
 
-        case "DOWNLOAD_FINAL":
-            downloadFinal();
-            sendResponse({ success: true });
-            break;
+
 
         case "SET_INDEX":
             const newIndex = msg.payload;
@@ -329,8 +329,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 progress: `${STATE.index}/${STATE.posts.length}`,
                 errors: STATE.errors,
                 finalCount: STATE.serverTotal,
-                serverUrl: SERVER_URL
+                serverUrl: SERVER_URL,
+                safeMode: STATE.safeMode
             });
+            break;
+
+        case "TOGGLE_SAFE_MODE":
+            STATE.safeMode = msg.payload;
+            saveState();
+            console.log(`🛡️ Safe Mode set to: ${STATE.safeMode}`);
+            sendResponse({ success: true });
             break;
     }
 });
@@ -410,8 +418,17 @@ function handlePostData(data) {
     console.log(`✅ Processed: ${STATE.index}/${STATE.posts.length}`, postId);
 
     // Anti-ban system: Random delay before next post
-    const minDelay = 10000; // 10 seconds
-    const maxDelay = 30000; // 30 seconds
+    // Anti-ban system: Random delay before next post
+    // Normal: 10-30s | Safe Mode: 30-60s
+    let minDelay = 10000;
+    let maxDelay = 30000;
+
+    if (STATE.safeMode) {
+        minDelay = 30000; // 30 seconds
+        maxDelay = 60000; // 60 seconds
+        console.log("🛡️ Safe Mode Active: Extended delay enabled.");
+    }
+
     const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 
     console.log(`⏳ Waiting ${Math.round(delay / 1000)}s before next post (Anti-ban protection)...`);
@@ -492,12 +509,18 @@ function nextPost() {
             chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Timeout! Skipping..." }).catch(() => { });
 
             // Use countdown even for timeouts (Anti-ban safety + consistency)
-            const minDelay = 10000;
-            const maxDelay = 30000;
+            let minDelay = 10000;
+            let maxDelay = 30000;
+
+            if (STATE.safeMode) {
+                minDelay = 30000;
+                maxDelay = 60000;
+            }
+
             const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
             startCountdown(delay, nextPost);
         }
-    }, 15000); // 15 seconds timeout (Reduced from 60s as per user request)
+    }, 30000); // 30 seconds timeout (Increased for better reliability on slow connections)
 
     // Notify UI: Scraping Started
     chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Scraping..." }).catch(() => { });

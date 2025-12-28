@@ -30,15 +30,24 @@
             </div>
         </div>
 
+        <div class="control-group safe-mode-group">
+            <div class="toggle-row">
+                <span class="toggle-label">Safe Mode (Slow)</span>
+                <label class="switch">
+                    <input type="checkbox" id="safe-mode-toggle">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+            <div class="toggle-hint">Increases delay to 30s-60s for safety</div>
+        </div>
+
         <div class="button-group">
             <button id="start">▶ Start</button>
             <button id="pause">⏸ Pause</button>
             <button id="resume">▶ Resume</button>
             <button id="stop">⏹ Stop</button>
-            <button id="previous">⏮ Previous</button>
             <button id="next">⏭ Next</button>
             <button id="reset">🔄 Reset</button>
-            <button id="download">💾 Download Final</button>
             <button id="update-final">📝 Update final.json</button>
         </div>
 
@@ -48,7 +57,10 @@
             <div id="countdown">Next in: --</div>
             <div id="errors">Errors: 0</div>
             <div id="final-count">Collected: 0</div>
-            <div id="server-info" style="font-size: 11px; color: #6366f1; margin-top: 5px;">Target: --</div>
+            <div id="server-status-row">
+                <span id="server-url">Target: --</span>
+                <span id="server-health" class="offline">● Offline</span>
+            </div>
             <div id="auto-save-status" class="status-note">Auto-save: Requires local server (npm start)</div>
         </div>
     </div>
