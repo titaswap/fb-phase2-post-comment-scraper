@@ -6,7 +6,8 @@
   "permissions": ["storage", "tabs", "scripting", "sidePanel", "downloads"],
   "host_permissions": ["https://www.facebook.com/*", "http://localhost:8080/*"],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [{
     "matches": ["https://www.facebook.com/*"],
@@ -23,6 +24,10 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8080"
   },
+  "web_accessible_resources": [{
+    "resources": ["src/content/*.js", "src/content/**/*.js"],
+    "matches": ["https://www.facebook.com/*"]
+  }],
   "icons": {
     "16": "icons/image2.png",
     "48": "icons/image2.png",
