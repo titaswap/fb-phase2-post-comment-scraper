@@ -9,9 +9,10 @@
 </head>
 
 <body>
-    <h2>FB Phase-2 Extractor</h2>
+
 
     <div class="control-section">
+        <div id="status-banner" class="status-banner">SYSTEM IDLE</div>
         <div class="file-input">
             <label for="file">Upload Phase-1 Data (phase1.json):</label>
             <input type="file" id="file" accept=".json" />
@@ -30,31 +31,47 @@
             </div>
         </div>
 
-        <div class="control-group safe-mode-group">
-            <div class="toggle-row">
-                <span class="toggle-label">Safe Mode (Slow)</span>
-                <label class="switch">
-                    <input type="checkbox" id="safe-mode-toggle">
-                    <span class="slider round"></span>
-                </label>
+        <div class="control-group delay-group" style="margin-bottom: 15px;">
+            <label>Random Delay (seconds)</label>
+            <div class="input-row" style="display: flex; gap: 10px; align-items: center;">
+                <input type="number" id="min-delay" min="1" max="300" placeholder="Min" style="width: 50%" />
+                <span>-</span>
+                <input type="number" id="max-delay" min="1" max="300" placeholder="Max" style="width: 50%" />
             </div>
-            <div class="toggle-hint">Increases delay to 30s-60s for safety</div>
         </div>
+
+
 
         <div class="button-group">
             <button id="start">▶ Start</button>
             <button id="pause">⏸ Pause</button>
             <button id="resume">▶ Resume</button>
             <button id="stop">⏹ Stop</button>
+            <button id="previous">⏮ Prev</button>
             <button id="next">⏭ Next</button>
             <button id="reset">🔄 Reset</button>
-            <button id="update-final">📝 Update final.json</button>
         </div>
 
         <div class="status-section">
+            <div id="countdown">Ready to Start</div>
             <div id="status">Idle</div>
+            <!-- Old simple text progress hidden via CSS -->
             <div id="progress">Progress: 0/0</div>
-            <div id="countdown">Next in: --</div>
+
+            <!-- New Sexy Progress Bar -->
+            <div class="progress-container">
+                <div class="progress-label">
+                    <span class="progress-text">Progress</span>
+                    <span class="progress-percent" id="progress-percent-text">0%</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="progress-fill"></div>
+                </div>
+                <div style="font-size: 11px; margin-top: 4px; color: #94a3b8; text-align: right;">
+                    <span id="progress-fraction">0 / 0</span>
+                </div>
+            </div>
+
             <div id="errors">Errors: 0</div>
             <div id="final-count">Collected: 0</div>
             <div id="server-status-row">

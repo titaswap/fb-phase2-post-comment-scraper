@@ -1,82 +1,107 @@
 // Side Panel Script for FB Phase-2 Extractor
+// View Logic - Driven by Background State
 
 const logEl = document.getElementById("log");
 const statusEl = document.getElementById("status");
-const progressEl = document.getElementById("progress");
 const errorsEl = document.getElementById("errors");
 const finalCountEl = document.getElementById("final-count");
 
 // Utility functions
 const log = msg => {
     const timestamp = new Date().toLocaleTimeString();
-    logEl.textContent += `[${timestamp}] ${msg}\n`;
+    const newEntry = `[${timestamp}] ${msg}`;
+
+    const currentText = logEl.textContent;
+    // Split by newline and filter out empty strings to avoid phantom lines
+    let lines = currentText.split('\n').filter(line => line.trim() !== '');
+
+    lines.push(newEntry);
+
+    // Keep only the last 20 lines
+    if (lines.length > 20) {
+        lines = lines.slice(lines.length - 20);
+    }
+
+    logEl.textContent = lines.join('\n') + '\n';
     logEl.scrollTop = logEl.scrollHeight;
 };
+const debug = log; // Debug alias
 
-const setStatus = msg => {
-    statusEl.textContent = msg;
-};
-
+// Main UI Update Function
 const updateUI = (status) => {
-    setStatus(status.running ? (status.paused ? "Paused" : "Running") : "Idle");
-    progressEl.textContent = `Progress: ${status.progress}`;
-    errorsEl.textContent = `Errors: ${status.errors}`;
-    finalCountEl.textContent = `Collected: ${status.finalCount}`;
+    if (!status) return;
 
-    // Update Server Info
-    const serverEl = document.getElementById("server-url");
-    if (serverEl && status.serverUrl) {
-        serverEl.textContent = `Target: ${status.serverUrl}`;
+    // 1. Run State
+    const runState = status.running ? (status.paused ? "Paused" : "Running") : "Idle";
+    statusEl.textContent = runState;
+    statusEl.className = status.running ? (status.paused ? "paused" : "running") : "status";
+
+    // 2. Progress Bar
+    let current = 0;
+    let total = 0;
+    if (status.progress) {
+        const parts = status.progress.split('/');
+        if (parts.length === 2) {
+            current = parseInt(parts[0]) || 0;
+            total = parseInt(parts[1]) || 0;
+        }
     }
+    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
 
-    // Update auto-save status
-    const autoSaveEl = document.getElementById("auto-save-status");
-    if (status.running && !status.paused) {
-        autoSaveEl.textContent = "Auto-save: Active (to ./data/final.json via server)";
-        autoSaveEl.style.color = "#10b981";
-    } else {
-        autoSaveEl.textContent = "Auto-save: Requires local server (npm start)";
-        autoSaveEl.style.color = "#94a3b8";
-    }
+    document.getElementById("progress-fill").style.width = `${percent}%`;
+    document.getElementById("progress-percent-text").textContent = `${percent}%`;
+    document.getElementById("progress-fraction").textContent = `${current} / ${total}`;
 
-    // Button States Logic
+    // 3. Stats & Info
+    errorsEl.textContent = `Errors: ${status.errors || 0}`;
+    finalCountEl.textContent = `Collected: ${status.finalCount !== undefined ? status.finalCount : "0"}`;
+
+    // 4. Server Health
+    // Managed independently by checkDirectServerHealth() polling
+    // Do NOT overwrite with stale background status 
+
+    // 5. Button States
     const isRunning = status.running;
     const isPaused = status.paused;
 
-    // Control Buttons
     document.getElementById("start").disabled = isRunning;
     document.getElementById("pause").disabled = !isRunning || isPaused;
     document.getElementById("resume").disabled = !isRunning || !isPaused;
     document.getElementById("stop").disabled = !isRunning;
 
-    // Navigation/Config Buttons (Disabled while running for safety)
+    // 6. Config Inputs (Disabled while running)
     const inputsDisabled = isRunning;
-    document.getElementById("previous").disabled = inputsDisabled;
-    document.getElementById("next").disabled = inputsDisabled;
-    document.getElementById("reset").disabled = inputsDisabled;
-    document.getElementById("set-index-btn").disabled = inputsDisabled;
-    document.getElementById("start-index-input").disabled = inputsDisabled;
-    document.getElementById("file").disabled = inputsDisabled;
-    document.getElementById("final-file").disabled = inputsDisabled;
-    document.getElementById("safe-mode-toggle").disabled = isRunning; // Disable toggle while running
-
-    // Update Safe Mode Toggle UI
-    if (status.safeMode !== undefined) {
-        document.getElementById("safe-mode-toggle").checked = status.safeMode;
-    }
-};
-
-// Toggle Safe Mode Listener
-document.getElementById("safe-mode-toggle").onchange = (e) => {
-    const isChecked = e.target.checked;
-    chrome.runtime.sendMessage({ type: "TOGGLE_SAFE_MODE", payload: isChecked }, (response) => {
-        if (response && response.success) {
-            log(isChecked ? "🛡️ Safe Mode Enabled (30s-60s delay)" : "⚡ Safe Mode Disabled (10s-30s delay)");
-        }
+    const ids = ["previous", "next", "reset", "set-index-btn", "start-index-input", "file", "final-file", "min-delay", "max-delay"];
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = inputsDisabled;
     });
+
+    // 7. Safe Mode Removed
+    // (Logic deleted)
+
+    // 8. Delay Inputs
+    const minDelayInput = document.getElementById("min-delay");
+    const maxDelayInput = document.getElementById("max-delay");
+
+    if (minDelayInput && status.minDelay !== undefined) minDelayInput.value = status.minDelay;
+    if (maxDelayInput && status.maxDelay !== undefined) maxDelayInput.value = status.maxDelay;
 };
 
-// Load initial status
+// ... (Existing code) ...
+
+// Delay Input Handlers
+document.getElementById("min-delay").onchange = (e) => {
+    const val = parseInt(e.target.value, 10);
+    if (val > 0) chrome.runtime.sendMessage({ type: "UPDATE_DELAY_SETTINGS", payload: { min: val } });
+};
+
+document.getElementById("max-delay").onchange = (e) => {
+    const val = parseInt(e.target.value, 10);
+    if (val > 0) chrome.runtime.sendMessage({ type: "UPDATE_DELAY_SETTINGS", payload: { max: val } });
+};
+
+// Check Status Immediately
 chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {
     if (response) updateUI(response);
 });
@@ -232,98 +257,89 @@ document.getElementById("set-index-btn").onclick = () => {
 
 
 
-// Update final.json handler (opens data in new tab for manual copy-paste)
-document.getElementById("update-final").onclick = () => {
-    chrome.runtime.sendMessage({ type: "GET_FINAL_DATA" }, (response) => {
-        if (response && response.data) {
-            // Create a data URL with the JSON data
-            const dataStr = JSON.stringify(response.data, null, 2);
-            const dataUrl = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
 
-            // Open in new tab
-            chrome.tabs.create({ url: dataUrl }, (tab) => {
-                log("📝 Opened final.json data in new tab. Copy and paste into data/final.json file.");
-            });
-        } else {
-            log("❌ No data to update");
-        }
-    });
-};
 
-// Periodic status updates
-setInterval(() => {
-    chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {
-        if (response) updateUI(response);
-    });
-}, 2000);
+// Connection Logic REMOVED
 
-// Listen for countdown, status, and server updates
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === "COUNTDOWN_UPDATE") {
-        const countdownEl = document.getElementById("countdown");
-        if (countdownEl) {
-            const payload = msg.payload;
+// --- Hybrid Update Strategy ---
 
-            if (typeof payload === 'number') {
-                if (payload > 0) {
-                    countdownEl.textContent = `Next in: ${payload}s`;
-                    countdownEl.style.color = payload <= 3 ? "#ef4444" : "#f59e0b"; // Red : Orange
-                } else {
-                    countdownEl.textContent = "Connecting...";
-                    countdownEl.style.color = "#10b981"; // Green
-                }
-            } else if (typeof payload === 'string') {
-                countdownEl.textContent = payload;
+// ----------------------------------------------------
+// STORAGE-BASED UI UPDATE (MV3 Compliant)
+// ----------------------------------------------------
 
-                // Dynamic colors for text states
-                if (payload.includes("Scraping") || payload.includes("Loading")) {
-                    countdownEl.style.color = "#0ea5e9"; // Blue
-                } else if (payload.includes("Timeout") || payload.includes("Error")) {
-                    countdownEl.style.color = "#ef4444"; // Red
-                } else if (payload.includes("Processed")) {
-                    countdownEl.style.color = "#10b981"; // Green
-                } else {
-                    countdownEl.style.color = "#94a3b8"; // Default Grey
-                }
+// ----------------------------------------------------
+// LOCAL COUNTDOWN TIMER (MV3 Compliant - UI Side)
+// ----------------------------------------------------
+let localCountdownTimer = null;
+
+function handleCountdown(state) {
+    // Clear existing timer if any
+    if (localCountdownTimer) {
+        clearInterval(localCountdownTimer);
+        localCountdownTimer = null;
+    }
+
+    if (state.countdownTarget) {
+        const target = state.countdownTarget;
+
+        // Start local interval to update UI
+        localCountdownTimer = setInterval(() => {
+            const now = Date.now();
+            const remainingMs = target - now;
+            const remainingSec = Math.ceil(remainingMs / 1000);
+
+            if (remainingSec <= 0) {
+                // Done
+                updateCountdown({ countdown: 0 }); // Show 0 or Ready
+                clearInterval(localCountdownTimer);
+                localCountdownTimer = null;
+            } else {
+                updateCountdown({ countdown: remainingSec });
             }
-        }
-    } else if (msg.type === "SERVER_STATS") {
-        const stats = msg.payload;
-        const finalCountEl = document.getElementById("final-count");
+        }, 200); // 5fps update for smoothness
 
-        if (stats.success) {
-            finalCountEl.textContent = `Collected: ${stats.total}`;
+        // Immediate update
+        const now = Date.now();
+        const remainingMs = target - now;
+        const remainingSec = Math.ceil(remainingMs / 1000);
+        updateCountdown({ countdown: remainingSec > 0 ? remainingSec : 0 });
 
-            // Show temporary status next to count or in a specific place
-            const statusSuffix = stats.appended > 0 ? ` (+${stats.appended} New)` : ` (Duplicate)`;
-            finalCountEl.textContent += statusSuffix;
-            finalCountEl.style.color = stats.appended > 0 ? "#10b981" : "#f59e0b"; // Green if new, Orange if duplicate
+    } else {
+        // No active countdown
+        updateCountdown({ countdown: null });
+    }
+}
 
-            // Reset style after 3 seconds
-            setTimeout(() => {
-                finalCountEl.textContent = `Collected: ${stats.total}`;
-                finalCountEl.style.color = "#10b981"; // Back to green
-            }, 3000);
-
-        } else {
-            finalCountEl.textContent = `Error: ${stats.error}`;
-            finalCountEl.style.color = "#ef4444";
-        }
-    } else if (msg.type === "LOG_MESSAGE") {
-        log(msg.payload);
+// 1. Listen for State Changes (Even if SW sleeps, storage persists)
+chrome.storage.local.onChanged.addListener((changes) => {
+    if (changes.ui_state) {
+        const state = changes.ui_state.newValue;
+        // console.log("🔥 UI STATE CHANGE:", state); // DEBUG
+        updateUI(state);
+        // updateCountdown(state); // Handled by handleCountdown
+        handleCountdown(state);
     }
 });
 
-// --- Server Health Check ---
-const healthEl = document.getElementById("server-health");
+// 2. Initial Load
+chrome.storage.local.get('ui_state', (res) => {
+    if (res.ui_state) {
+        updateUI(res.ui_state);
+        // updateCountdown(res.ui_state); // Handled by handleCountdown
+        handleCountdown(res.ui_state);
+    }
+});
 
-async function checkServerHealth() {
+// 2. Direct Server Health Check (Decoupled from Background)
+async function checkDirectServerHealth() {
+    const healthEl = document.getElementById("server-health");
     if (!healthEl) return;
 
+    debug("Server health check"); // Added debug call
+
     try {
-        // Short timeout to detect offline status quickly
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const timeoutId = setTimeout(() => controller.abort(), 1500); // 1.5s timeout
 
         const response = await fetch("http://localhost:8080/health", {
             method: 'GET',
@@ -343,7 +359,58 @@ async function checkServerHealth() {
     }
 }
 
-// Check health every 5 seconds
-setInterval(checkServerHealth, 5000);
-// Check immediately on load
-checkServerHealth();
+setInterval(checkDirectServerHealth, 2000); // Check every 2 seconds
+checkDirectServerHealth(); // Initial check
+
+
+// 3. Active Polling (PULL) - REMOVED
+// We now rely solely on the Port (PUSH) mechanism.
+
+// 4. Initial Pull
+setTimeout(() => {
+    chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {
+        if (response) updateUI(response);
+    });
+}, 100);
+
+
+// Helper: Countdown Logic
+// Helper: Countdown Logic
+function updateCountdown(status) {
+    if (!status) return; // Guard clause
+    const countdownEl = document.getElementById("countdown");
+    if (!countdownEl) return;
+
+    // Use the `countdown` value from status if available
+    const val = status.countdown;
+    // console.log("⏳ Countdown update:", val); // DEBUG
+
+    // Reset classes
+    countdownEl.classList.remove("active", "processing");
+    countdownEl.style.color = ""; // Clear inline styles
+
+    if (val === undefined || val === null) {
+        if (status.running && !status.paused) {
+            // It's processing
+            countdownEl.textContent = "Processing...";
+            countdownEl.classList.add("processing");
+        } else if (status.paused) {
+            countdownEl.textContent = "⏸ Paused";
+            countdownEl.style.color = "#f59e0b";
+        } else {
+            countdownEl.textContent = "Ready";
+            countdownEl.style.color = "#94a3b8";
+        }
+    } else {
+        // Active numeric countdown
+        countdownEl.textContent = `Next in ${val}s`;
+        countdownEl.classList.add("active"); // pulses green bg
+
+        // Urgent color override
+        if (val <= 5) {
+            countdownEl.style.color = "#ef4444";
+            countdownEl.style.borderColor = "#ef4444";
+            countdownEl.style.backgroundColor = "rgba(239, 68, 68, 0.1)";
+        }
+    }
+}

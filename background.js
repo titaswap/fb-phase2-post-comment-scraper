@@ -17,25 +17,38 @@ let STATE = {
     processedIds: new Set(), // Set of numeric IDs from server for pre-check
     navigationTimeout: null, // Failsafe timer
     countdownTimer: null, // Timer for anti-ban countdown
-    serverTotal: "N/A (Saved on Server)", // Store server total count
-    safeMode: false // Safe Mode state
+    countdownValue: null, // Current countdown value for UI
+    serverTotal: 0, // Store server total count (Default 0)
+    serverHealth: false, // Track server health status in background
+    safeMode: false, // Safe Mode state
+    minDelay: 10, // Default Min Delay (seconds)
+    maxDelay: 30  // Default Max Delay (seconds)
 };
 
+// Check Server Health (Background) - REMOVED (Handled in Side Panel)
+// function checkServerHealth() { ... }
+
 // Load saved state on startup
-chrome.storage.local.get(["phase1", "final", "index", "errors", "processed"], (result) => {
+chrome.storage.local.get(["phase1", "final", "index", "errors", "processed", "safeMode", "minDelay", "maxDelay"], (result) => {
     if (result.phase1) STATE.posts = result.phase1;
     // if (result.final) STATE.final = result.final; // REMOVED
     if (result.index !== undefined) STATE.index = result.index;
     if (result.errors !== undefined) STATE.errors = result.errors;
     if (result.processed) STATE.processed = new Set(result.processed);
     if (result.safeMode !== undefined) STATE.safeMode = result.safeMode;
+    if (result.minDelay !== undefined) STATE.minDelay = result.minDelay;
+    if (result.maxDelay !== undefined) STATE.maxDelay = result.maxDelay;
+
+    // Fetch initial server count
+    fetchServerTotal();
 
     console.log("📦 State restored:", {
         posts: STATE.posts.length,
         index: STATE.index,
-        // final: STATE.final.length,
-        errors: STATE.errors
+        errors: STATE.errors,
+        delays: [STATE.minDelay, STATE.maxDelay]
     });
+
 
     // Show auto-save info
     console.log("💾 Auto-save location: ./data/final.json");
@@ -47,11 +60,13 @@ chrome.storage.local.get(["phase1", "final", "index", "errors", "processed"], (r
 function saveState() {
     chrome.storage.local.set({
         phase1: STATE.posts,
-        // final: STATE.final, // REMOVED: Don't save big data to local storage
+        // final: STATE.final, // REMOVED
         index: STATE.index,
         errors: STATE.errors,
         processed: Array.from(STATE.processed),
-        safeMode: STATE.safeMode
+        safeMode: STATE.safeMode,
+        minDelay: STATE.minDelay,
+        maxDelay: STATE.maxDelay
     });
 }
 
@@ -61,6 +76,27 @@ function clearNavigationTimeout() {
         clearTimeout(STATE.navigationTimeout);
         STATE.navigationTimeout = null;
     }
+}
+
+// Fetch current total from server
+function fetchServerTotal() {
+    fetch('http://localhost:8080/get-data')
+        .then(res => res.json())
+        .then(data => {
+            if (Array.isArray(data)) {
+                STATE.serverTotal = data.length;
+
+                // Populate processedIds for deduplication
+                data.forEach(p => {
+                    const nid = extractNumericId(p.post?.url || "");
+                    if (nid) STATE.processedIds.add(nid);
+                });
+
+                console.log(`📊 Initial Server Count: ${STATE.serverTotal}`);
+                syncUIState(); // Update UI with initial count
+            }
+        })
+        .catch(err => console.log("⚠️ Could not fetch initial server stats (Server might be offline)"));
 }
 
 // Auto-save final.json via local server
@@ -84,6 +120,7 @@ function sendDataToServer(dataItems) {
 
                     // Update state
                     STATE.serverTotal = data.total;
+                    syncUIState(); // Sync UI immediately with new stats
 
                     // Broadcast Server Stats to UI
                     chrome.runtime.sendMessage({
@@ -162,6 +199,43 @@ function stopPeriodicAutoSave() {
     }
 }
 
+// Connection Listener (Keep-Alive for Side Panel)
+// Connection Logic REMOVED (Strict runtime.sendMessage only)
+
+// ----------------------------------------------------
+// STORAGE-BASED UI SYNC (MV3 Compliant)
+// ----------------------------------------------------
+function syncUIState() {
+    chrome.storage.local.set({
+        ui_state: {
+            running: STATE.running,
+            paused: STATE.paused,
+            progress: `${STATE.index}/${STATE.posts.length}`,
+            errors: STATE.errors,
+            finalCount: STATE.serverTotal,
+            safeMode: STATE.safeMode,
+            // serverHealth: STATE.serverHealth, // REMOVED: Handled by sidepanel.js
+            countdownTarget: STATE.countdownTarget, // Timestamp when countdown ends
+            minDelay: STATE.minDelay,
+            maxDelay: STATE.maxDelay,
+            ts: Date.now()
+        }
+    });
+}
+
+// Initial Sync
+syncUIState();
+
+// Consolidated broadcast logic is at the bottom of the file
+
+
+// Action click to open side panel
+chrome.action.onClicked.addListener(() => {
+    chrome.windows.getCurrent((window) => {
+        chrome.sidePanel.open({ windowId: window.id }).catch(() => { });
+    });
+});
+
 // Message listener
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     switch (msg.type) {
@@ -200,6 +274,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             }
             STATE.running = true;
             STATE.paused = false;
+            syncUIState(); // Sync UI on start
 
             // Allow async response
             // sendResponse({ success: true }); // We will send response after sync ? No, keep it responsive.
@@ -212,7 +287,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             fetchServerProcessedIds().then(() => {
                 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                     STATE.tabId = tabs[0].id;
-                    chrome.sidePanel.open({ windowId: tabs[0].windowId });
+                    // chrome.sidePanel.open({ windowId: tabs[0].windowId }); // REMOVED: Already open, avoids user gesture error
                     nextPost();
                 });
             });
@@ -223,17 +298,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             stopPeriodicAutoSave();
             clearNavigationTimeout(); // Don't skip if paused
             if (STATE.countdownTimer) {
-                clearInterval(STATE.countdownTimer);
+                clearTimeout(STATE.countdownTimer); // Use clearTimeout now
                 STATE.countdownTimer = null;
-                // Notify UI that we paused during countdown?
-                chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: 0 }).catch(() => { });
             }
+            STATE.countdownTarget = null; // Clear target
+            syncUIState(); // Sync UI on pause
             sendResponse({ success: true });
             break;
 
         case "RESUME_PHASE2":
             STATE.paused = false;
             // startPeriodicAutoSave();
+            syncUIState(); // Sync UI on resume
             nextPost();
             sendResponse({ success: true });
             break;
@@ -244,10 +320,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             stopPeriodicAutoSave();
             clearNavigationTimeout();
             if (STATE.countdownTimer) {
-                clearInterval(STATE.countdownTimer);
+                clearTimeout(STATE.countdownTimer);
                 STATE.countdownTimer = null;
             }
+            STATE.countdownTarget = null; // Clear target
             saveState();
+            syncUIState(); // Sync UI on stop
             sendResponse({ success: true });
             break;
 
@@ -330,13 +408,43 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 errors: STATE.errors,
                 finalCount: STATE.serverTotal,
                 serverUrl: SERVER_URL,
-                safeMode: STATE.safeMode
+                safeMode: STATE.safeMode,
+                // serverHealth: STATE.serverHealth, // REMOVED
+                countdownTarget: STATE.countdownTarget,
+                minDelay: STATE.minDelay,
+                maxDelay: STATE.maxDelay
             });
+            break;
+
+        case "CHECK_SERVER":
+            // Force a check (optional, or just return current state)
+            // checkServerHealth(); // REMOVED
+            sendResponse({
+                // online: STATE.serverHealth, // REMOVED
+                total: STATE.serverTotal
+            });
+            break;
+
+        case "UPDATE_DELAY_SETTINGS":
+            const { min, max } = msg.payload;
+            if (min) STATE.minDelay = min;
+            if (max) STATE.maxDelay = max;
+            saveState();
+            syncUIState();
+            sendResponse({ success: true });
             break;
 
         case "TOGGLE_SAFE_MODE":
             STATE.safeMode = msg.payload;
+            if (STATE.safeMode) {
+                STATE.minDelay = 30;
+                STATE.maxDelay = 60;
+            } else {
+                STATE.minDelay = 10;
+                STATE.maxDelay = 30;
+            }
             saveState();
+            syncUIState(); // Ensure UI gets updated Min/Max
             console.log(`🛡️ Safe Mode set to: ${STATE.safeMode}`);
             sendResponse({ success: true });
             break;
@@ -419,14 +527,15 @@ function handlePostData(data) {
 
     // Anti-ban system: Random delay before next post
     // Anti-ban system: Random delay before next post
-    // Normal: 10-30s | Safe Mode: 30-60s
-    let minDelay = 10000;
-    let maxDelay = 30000;
+    // Normal: 10-30s | Safe Mode: 30-60s (Now Dynamic)
+    let minDelay = (STATE.minDelay || 10) * 1000;
+    let maxDelay = (STATE.maxDelay || 30) * 1000;
 
+    // Redundant double check logic just in case user edited delays weirdly while safe mode is on
+    // Prioritize values in STATE over hardcoded logic
     if (STATE.safeMode) {
-        minDelay = 30000; // 30 seconds
-        maxDelay = 60000; // 60 seconds
-        console.log("🛡️ Safe Mode Active: Extended delay enabled.");
+        console.log("🛡️ Safe Mode Active");
+        // Ensure constraints if they got weird? No, trust updated state.
     }
 
     const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
@@ -436,29 +545,28 @@ function handlePostData(data) {
     startCountdown(delay, nextPost);
 }
 
-// Helper: Start countdown with UI updates
+// Helper: Start countdown (Timestamp-based)
 function startCountdown(durationMs, onComplete) {
-    let remaining = Math.ceil(durationMs / 1000);
+    if (STATE.countdownTimer) {
+        clearTimeout(STATE.countdownTimer);
+    }
 
-    // Clear any existing timer
-    if (STATE.countdownTimer) clearInterval(STATE.countdownTimer);
+    const target = Date.now() + durationMs;
+    STATE.countdownTarget = target;
 
-    // Initial broadcast
-    chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: remaining }).catch(() => { });
+    syncUIState(); // Broadcast the TARGET timestamp, not value
 
-    STATE.countdownTimer = setInterval(() => {
-        remaining--;
-
-        // Broadcast update
-        chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: remaining }).catch(() => { });
-
-        if (remaining <= 0) {
-            clearInterval(STATE.countdownTimer);
-            STATE.countdownTimer = null;
-            onComplete();
-        }
-    }, 1000);
+    STATE.countdownTimer = setTimeout(() => {
+        STATE.countdownTimer = null;
+        STATE.countdownTarget = null;
+        syncUIState();
+        onComplete();
+    }, durationMs);
 }
+
+// REMOVED: broadcastStatus
+// All state changes should call syncUIState()
+// setInterval(broadcastStatus, 1000); // REMOVED
 
 // Process next post
 function nextPost() {
@@ -480,10 +588,8 @@ function nextPost() {
     if (numericId && STATE.processedIds.has(numericId)) {
         console.log(`⏭️ Skipping Duplicate Post: ${numericId}`);
         // Log to UI
-        chrome.runtime.sendMessage({
-            type: "LOG_MESSAGE",
-            payload: `⏭️ Skipping duplicate: ${numericId}`
-        }).catch(() => { });
+        // Log to UI - REMOVED (Strict Storage Sync only)
+        // chrome.runtime.sendMessage({ type: "LOG_MESSAGE", ... });
 
         STATE.index++; // Move to next
         saveState();
@@ -495,6 +601,7 @@ function nextPost() {
 
     // If we are here, we are processing this post
     STATE.index++;
+    syncUIState(); // REQUIRED: Sync index increment immediately
     console.log("➡ Loading post:", STATE.index, post.post_link);
 
     // Set 60s failsafe timeout
@@ -506,7 +613,10 @@ function nextPost() {
             saveState();
 
             // Notify UI of Timeout
-            chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Timeout! Skipping..." }).catch(() => { });
+            // Notify UI of Timeout
+            // chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Timeout! Skipping..." }).catch(() => { });
+            STATE.countdownValue = null; // Reset text? Or keep it null.
+            syncUIState();
 
             // Use countdown even for timeouts (Anti-ban safety + consistency)
             let minDelay = 10000;
@@ -523,7 +633,9 @@ function nextPost() {
     }, 30000); // 30 seconds timeout (Increased for better reliability on slow connections)
 
     // Notify UI: Scraping Started
-    chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Scraping..." }).catch(() => { });
+    // Notify UI: Scraping Started
+    // chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Scraping..." }).catch(() => { });
+    syncUIState();
 
     chrome.tabs.update(STATE.tabId, { url: post.post_link }, () => {
         if (chrome.runtime.lastError) {
@@ -532,8 +644,11 @@ function nextPost() {
             saveState();
             // Retry after delay (Standard countdown)
             const delay = 5000; // Short 5s delay for errors
-            chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Error! Retrying..." }).catch(() => { });
-            startCountdown(delay, nextPost);
+            // Retry after delay (Standard countdown)
+            const retryDelay = 5000; // Short 5s delay for errors
+            // chrome.runtime.sendMessage({ type: "COUNTDOWN_UPDATE", payload: "Error! Retrying..." }).catch(() => { });
+            syncUIState();
+            startCountdown(retryDelay, nextPost);
         }
     });
 }
@@ -549,8 +664,9 @@ function processNextPost() {
     console.log("➡ Loading single post:", STATE.index, post.post_link);
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || tabs.length === 0) return;
         const tabId = tabs[0].id;
-        chrome.sidePanel.open({ windowId: tabs[0].windowId });
+        // chrome.sidePanel.open({ windowId: tabs[0].windowId }).catch(() => {}); // Optional: Auto-open
 
         chrome.tabs.update(tabId, { url: post.post_link }, () => {
             if (chrome.runtime.lastError) {
@@ -574,8 +690,9 @@ function processPreviousPost() {
     console.log("⬅ Loading previous post:", STATE.index + 1, post.post_link);
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || tabs.length === 0) return;
         const tabId = tabs[0].id;
-        chrome.sidePanel.open({ windowId: tabs[0].windowId });
+        // chrome.sidePanel.open({ windowId: tabs[0].windowId }).catch(() => {});
 
         chrome.tabs.update(tabId, { url: post.post_link }, () => {
             if (chrome.runtime.lastError) {
@@ -587,13 +704,9 @@ function processPreviousPost() {
     });
 }
 
-// Download final.json (manual download)
-// Download function removed - Data is stored on server only
-
-
 // Action click to open side panel
 chrome.action.onClicked.addListener(() => {
     chrome.windows.getCurrent((window) => {
-        chrome.sidePanel.open({ windowId: window.id });
+        chrome.sidePanel.open({ windowId: window.id }).catch(() => { });
     });
 });
